@@ -1,0 +1,18 @@
+<?php
+// データベース接続設定サンプル
+// このファイルをコピーしてdatabase.phpとして使用してください
+
+$host = 'localhost';
+$port = '8889'; // MAMPのデフォルトポート（XAMPPの場合は3306）
+$dbname = 'shift_management';
+$username = 'root';
+$password = 'root'; // MAMPのデフォルトパスワード（XAMPPの場合は空文字 ''）
+
+try {
+    $pdo = new PDO("mysql:host=$host;port=$port;dbname=$dbname;charset=utf8mb4", $username, $password);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch(PDOException $e) {
+    die("データベース接続エラー: " . $e->getMessage());
+}
+?>

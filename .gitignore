@@ -1,0 +1,50 @@
+# データベース設定ファイル（機密情報）
+config/database.php
+
+# ログファイル
+*.log
+logs/
+error_log
+
+# システムファイル
+.DS_Store
+Thumbs.db
+
+# エディタ設定
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 一時ファイル
+tmp/
+temp/
+cache/
+
+# デバッグファイル
+debug_*.php
+
+# 環境固有ファイル
+.env
+.env.local
+.env.production
+
+# バックアップファイル
+*.bak
+*.backup
+
+# MAMPログ
+/Applications/MAMP/logs/
+
+# コンポーザー（使用している場合）
+vendor/
+composer.lock
+
+# Node.js（使用している場合）
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# アップロードファイル（もしあれば）
+uploads/
+files/
