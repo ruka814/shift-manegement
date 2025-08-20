@@ -2,9 +2,9 @@
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
-// 出勤可能時間入力画面
+// 日付ベース出勤可能時間入力画面
 $message = '';
-$selectedEventId = $_GET['event_id'] ?? '';
+$selectedDate = $_GET['date'] ?? date('Y-m-d');
 
 // 出勤情報保存処理
 if ($_POST['action'] ?? '' === 'save_availability') {
@@ -12,11 +12,11 @@ if ($_POST['action'] ?? '' === 'save_availability') {
         $pdo->beginTransaction();
         
         // バリデーション
-        $event_id = $_POST['event_id'] ?? null;
+        $work_date = $_POST['work_date'] ?? null;
         $availability_data = $_POST['availability'] ?? [];
         
-        if (empty($event_id)) {
-            throw new Exception('イベントIDが指定されていません。');
+        if (empty($work_date)) {
+            throw new Exception('日付が指定されていません。');
         }
         
         if (empty($availability_data)) {
@@ -41,12 +41,14 @@ if ($_POST['action'] ?? '' === 'save_availability') {
                 continue; // 存在しないユーザーIDはスキップ
             }
             
-            // 既存データを削除
-            $stmt = $pdo->prepare("DELETE FROM availability WHERE user_id = ? AND event_id = ?");
-            $stmt->execute([$userId, $event_id]);
+            // まず該当日のユーザーの既存データを削除（一般的な出勤情報のみ）
+            // event_id IS NULL または event_id = 0 の両方を削除
+            $stmt = $pdo->prepare("DELETE FROM availability WHERE user_id = ? AND work_date = ? AND (event_id IS NULL OR event_id = 0)");
+            $stmt->execute([$userId, $work_date]);            // 時間が入力されている場合のみ保存
+            $hasStartTime = !empty($data['start_hour']) && !empty($data['start_minute']);
+            $hasEndTime = !empty($data['end_hour']) && !empty($data['end_minute']);
             
-            // 新しいデータを挿入
-            if (isset($data['available'])) {
+            if ($hasStartTime || $hasEndTime) {
                 $user = $userInfo[$userId];
                 
                 // 高校生の時間制限チェック
@@ -68,31 +70,51 @@ if ($_POST['action'] ?? '' === 'save_availability') {
                 $start_time = null;
                 $end_time = null;
                 
-                if (!empty($data['start_hour']) && !empty($data['start_minute'])) {
+                if ($hasStartTime) {
                     $start_time = sprintf('%02d:%02d', $data['start_hour'], $data['start_minute']);
                 }
                 
-                if (!empty($data['end_hour']) && !empty($data['end_minute'])) {
+                if ($hasEndTime) {
                     $end_time = sprintf('%02d:%02d', $data['end_hour'], $data['end_minute']);
                 }
                 
-                $stmt = $pdo->prepare("
-                    INSERT INTO availability (user_id, event_id, available, available_start_time, available_end_time, note) 
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->execute([
-                    $userId,
-                    $event_id,
-                    1,
-                    $start_time,
-                    $end_time,
-                    $data['note'] ?? ''
-                ]);
+                // まず、テーブル構造を確認してevent_idがNULL許可かチェック
+                try {
+                    $stmt = $pdo->prepare("
+                        INSERT INTO availability (user_id, work_date, available, available_start_time, available_end_time, event_id) 
+                        VALUES (?, ?, ?, ?, ?, NULL)
+                    ");
+                    $stmt->execute([
+                        $userId,
+                        $work_date,
+                        1,
+                        $start_time,
+                        $end_time
+                    ]);
+                } catch (PDOException $e) {
+                    // NULLが許可されていない場合は、0を使用（一般的な出勤情報の識別子として）
+                    if (strpos($e->getMessage(), 'cannot be null') !== false) {
+                        $stmt = $pdo->prepare("
+                            INSERT INTO availability (user_id, work_date, available, available_start_time, available_end_time, event_id) 
+                            VALUES (?, ?, ?, ?, ?, 0)
+                        ");
+                        $stmt->execute([
+                            $userId,
+                            $work_date,
+                            1,
+                            $start_time,
+                            $end_time
+                        ]);
+                    } else {
+                        throw $e; // その他のエラーは再スロー
+                    }
+                }
             }
         }
         
         $pdo->commit();
         $message = showAlert('success', '出勤情報を保存しました。');
+        $selectedDate = $work_date; // 保存後も同じ日付を表示
     } catch(Exception $e) {
         $pdo->rollback();
         $message = showAlert('danger', $e->getMessage());
@@ -102,30 +124,18 @@ if ($_POST['action'] ?? '' === 'save_availability') {
     }
 }
 
-// イベント一覧取得
-$stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, description FROM events ORDER BY event_date, start_time");
-$events = $stmt->fetchAll();
-
-// 選択されたイベント情報取得
-$selectedEvent = null;
-if ($selectedEventId) {
-    $stmt = $pdo->prepare("SELECT * FROM events WHERE id = ?");
-    $stmt->execute([$selectedEventId]);
-    $selectedEvent = $stmt->fetch();
-}
-
 // ユーザー一覧取得
-$stmt = $pdo->query("SELECT id, name, is_rank, is_highschool FROM users");
+$stmt = $pdo->query("SELECT * FROM users");
 $users = $stmt->fetchAll();
 
-// PHP側で五十音順にソート
+// PHP側でランク別かつ五十音順にソート
 $users = sortUsersByRankAndName($users);
 
-// 既存の出勤情報取得
+// 既存の出勤情報取得（選択された日付、一般的な出勤情報のみ）
 $existingAvailability = [];
-if ($selectedEventId) {
-    $stmt = $pdo->prepare("SELECT * FROM availability WHERE event_id = ?");
-    $stmt->execute([$selectedEventId]);
+if ($selectedDate) {
+    $stmt = $pdo->prepare("SELECT * FROM availability WHERE work_date = ? AND (event_id IS NULL OR event_id = 0)");
+    $stmt->execute([$selectedDate]);
     $availability = $stmt->fetchAll();
     
     foreach ($availability as $avail) {
@@ -163,44 +173,24 @@ if ($selectedEventId) {
             <div class="col-md-4">
                 <div class="card">
                     <div class="card-header">
-                        <h5>⏰ イベント選択</h5>
+                        <h5>📅 日付選択</h5>
                     </div>
                     <div class="card-body">
                         <form method="GET">
                             <div class="mb-3">
-                                <label class="form-label">イベントを選択</label>
-                                <select class="form-select" name="event_id" onchange="this.form.submit()">
-                                    <option value="">選択してください</option>
-                                    <?php foreach ($events as $event): ?>
-                                    <option value="<?= $event['id'] ?>" <?= $selectedEventId == $event['id'] ? 'selected' : '' ?>>
-                                        <?= formatDate($event['event_date']) ?> - <?= h($event['event_type']) ?>
-                                    </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <label class="form-label">出勤日を選択</label>
+                                <input type="date" class="form-control" name="work_date" 
+                                       value="<?= $selectedDate ?>" onchange="this.form.submit()">
                             </div>
                         </form>
                         
-                        <?php if ($selectedEvent): ?>
-                        <div class="event-info mt-3">
-                            <h6>イベント詳細</h6>
+                        <?php if ($selectedDate): ?>
+                        <div class="date-info mt-3">
+                            <h6>選択した日付</h6>
                             <ul class="list-unstyled small">
-                                <li><strong>日時:</strong> <?= formatDate($selectedEvent['event_date']) ?></li>
-                                <li><strong>時間:</strong> <?= formatTime($selectedEvent['start_time']) ?> - <?= formatTime($selectedEvent['end_time']) ?></li>
-                                <li><strong>種別:</strong> <?= h($selectedEvent['event_type']) ?></li>
-                                <li><strong>説明:</strong> <?= h($selectedEvent['description']) ?></li>
+                                <li><strong>日付:</strong> <?= date('Y年m月d日', strtotime($selectedDate)) ?></li>
+                                <li><strong>曜日:</strong> <?= formatJapaneseWeekday($selectedDate) ?></li>
                             </ul>
-                            
-                            <div class="mt-3">
-                                <h6>必要人数</h6>
-                                <?php
-                                $needs = parseNeeds($selectedEvent['needs']);
-                                foreach ($needs as $role => $count):
-                                ?>
-                                <small class="d-block">
-                                    <span class="badge bg-secondary"><?= h($role) ?>: <?= $count['display'] ?></span>
-                                </small>
-                                <?php endforeach; ?>
-                            </div>
                         </div>
                         <?php endif; ?>
                     </div>
@@ -208,7 +198,7 @@ if ($selectedEventId) {
             </div>
             
             <div class="col-md-8">
-                <?php if ($selectedEvent): ?>
+                <?php if ($selectedDate): ?>
                 <div class="card">
                     <div class="card-header">
                         <h5>👥 スタッフ出勤時間入力</h5>
@@ -216,18 +206,15 @@ if ($selectedEventId) {
                     <div class="card-body">
                         <form method="POST">
                             <input type="hidden" name="action" value="save_availability">
-                            <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
+                            <input type="hidden" name="work_date" value="<?= $selectedDate ?>">
                             
                             <div class="table-responsive">
                                 <table class="table table-bordered">
                                     <thead class="table-light">
                                         <tr>
                                             <th>スタッフ名</th>
-                                            <th>ランク</th>
-                                            <th>出勤可能</th>
                                             <th>開始時間</th>
                                             <th>終了時間</th>
-                                            <th>備考</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -238,7 +225,7 @@ if ($selectedEventId) {
                                             if ($previousRank === 'ランナー' && $user['is_rank'] !== 'ランナー'):
                                         ?>
                                         <tr class="table-secondary">
-                                            <td colspan="6" class="text-center fw-bold">
+                                            <td colspan="3" class="text-center fw-bold">
                                                 <i class="fas fa-minus"></i> ランナー以外 <i class="fas fa-minus"></i>
                                             </td>
                                         </tr>
@@ -246,7 +233,7 @@ if ($selectedEventId) {
                                             elseif ($previousRank === null && $user['is_rank'] === 'ランナー'):
                                         ?>
                                         <tr class="table-primary">
-                                            <td colspan="6" class="text-center fw-bold">
+                                            <td colspan="3" class="text-center fw-bold">
                                                 <i class="fas fa-star"></i> ランナー <i class="fas fa-star"></i>
                                             </td>
                                         </tr>
@@ -254,7 +241,7 @@ if ($selectedEventId) {
                                             elseif ($previousRank === null && $user['is_rank'] !== 'ランナー'):
                                         ?>
                                         <tr class="table-secondary">
-                                            <td colspan="6" class="text-center fw-bold">
+                                            <td colspan="4" class="text-center fw-bold">
                                                 <i class="fas fa-minus"></i> ランナー以外 <i class="fas fa-minus"></i>
                                             </td>
                                         </tr>
@@ -264,27 +251,49 @@ if ($selectedEventId) {
                                         ?>
                                         <?php 
                                         $existing = $existingAvailability[$user['id']] ?? null;
-                                        $isChecked = $existing && $existing['available'];
                                         ?>
                                         <tr>
                                             <td>
-                                                <strong><?= h($user['name']) ?></strong>
+                                                <div class="fw-bold"><?= h($user['name']) ?></div>
+                                                <?php if (isset($user['furigana']) && !empty($user['furigana'])): ?>
+                                                <small class="text-muted"><?= h($user['furigana']) ?></small>
+                                                <?php endif; ?>
                                                 <?php if ($user['is_highschool']): ?>
                                                     <span class="badge bg-warning text-dark ms-1">🎓高校生</span>
                                                 <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <?= getRankBadge($user['is_rank']) ?>
-                                            </td>
-                                            <td>
-                                                <div class="form-check">
-                                                    <input class="form-check-input availability-check" 
-                                                           type="checkbox" 
-                                                           name="availability[<?= $user['id'] ?>][available]"
-                                                           id="available_<?= $user['id'] ?>"
-                                                           data-user-id="<?= $user['id'] ?>"
-                                                           <?= $isChecked ? 'checked' : '' ?>>
-                                                </div>
+                                                <?php if (isRunner($user['is_rank'])): ?>
+                                                    <div class="mt-1">
+                                                        <?php
+                                                        // ランナースキルのみ簡潔に表示
+                                                        $runnerSkillsStmt = $pdo->prepare("
+                                                            SELECT tt.name, s.skill_level 
+                                                            FROM skills s 
+                                                            JOIN task_types tt ON s.task_type_id = tt.id 
+                                                            WHERE s.user_id = ? AND tt.name IN ('コースランナー', 'ブッフェランナー') AND s.skill_level = 'できる'
+                                                            ORDER BY tt.name
+                                                        ");
+                                                        $runnerSkillsStmt->execute([$user['id']]);
+                                                        $runnerSkills = $runnerSkillsStmt->fetchAll();
+                                                        
+                                                        $skillLabels = [];
+                                                        foreach ($runnerSkills as $skill) {
+                                                            if ($skill['name'] === 'コースランナー') {
+                                                                $skillLabels[] = '<span class="badge bg-success text-white" style="font-size: 0.7rem;"><i class="fas fa-utensils"></i> コース</span>';
+                                                            } elseif ($skill['name'] === 'ブッフェランナー') {
+                                                                $skillLabels[] = '<span class="badge bg-warning text-dark" style="font-size: 0.7rem;"><i class="fas fa-server"></i> ブッフェ</span>';
+                                                            }
+                                                        }
+                                                        
+                                                        if (count($skillLabels) === 2) {
+                                                            echo '<span class="badge bg-primary text-white" style="font-size: 0.7rem;"><i class="fas fa-crown"></i> 両方対応</span>';
+                                                        } elseif (count($skillLabels) > 0) {
+                                                            echo implode(' ', $skillLabels);
+                                                        } else {
+                                                            echo '<small class="text-muted">ランナー</small>';
+                                                        }
+                                                        ?>
+                                                    </div>
+                                                <?php endif; ?>
                                             </td>
                                             <td>
                                                 <?php 
@@ -293,15 +302,13 @@ if ($selectedEventId) {
                                                 <div class="row g-1 time-row">
                                                     <div class="col-6">
                                                         <select class="form-select form-select-sm time-part-select" 
-                                                                name="availability[<?= $user['id'] ?>][start_hour]"
-                                                                <?= !$isChecked ? 'disabled' : '' ?>>
+                                                                name="availability[<?= $user['id'] ?>][start_hour]">
                                                             <?= $user['is_highschool'] ? generateHourOptionsForHighSchool($startTime['hour']) : generateHourOptions($startTime['hour']) ?>
                                                         </select>
                                                     </div>
                                                     <div class="col-6">
                                                         <select class="form-select form-select-sm time-part-select" 
-                                                                name="availability[<?= $user['id'] ?>][start_minute]"
-                                                                <?= !$isChecked ? 'disabled' : '' ?>>
+                                                                name="availability[<?= $user['id'] ?>][start_minute]">
                                                             <?= generateMinuteOptions($startTime['minute']) ?>
                                                         </select>
                                                     </div>
@@ -314,27 +321,17 @@ if ($selectedEventId) {
                                                 <div class="row g-1 time-row">
                                                     <div class="col-6">
                                                         <select class="form-select form-select-sm time-part-select" 
-                                                                name="availability[<?= $user['id'] ?>][end_hour]"
-                                                                <?= !$isChecked ? 'disabled' : '' ?>>
+                                                                name="availability[<?= $user['id'] ?>][end_hour]">
                                                             <?= $user['is_highschool'] ? generateHourOptionsForHighSchool($endTime['hour']) : generateHourOptions($endTime['hour']) ?>
                                                         </select>
                                                     </div>
                                                     <div class="col-6">
                                                         <select class="form-select form-select-sm time-part-select" 
-                                                                name="availability[<?= $user['id'] ?>][end_minute]"
-                                                                <?= !$isChecked ? 'disabled' : '' ?>>
+                                                                name="availability[<?= $user['id'] ?>][end_minute]">
                                                             <?= generateMinuteOptions($endTime['minute']) ?>
                                                         </select>
                                                     </div>
                                                 </div>
-                                            </td>
-                                            <td>
-                                                <input type="text" 
-                                                       class="form-control form-control-sm" 
-                                                       name="availability[<?= $user['id'] ?>][note]"
-                                                       value="<?= h($existing['note'] ?? '') ?>"
-                                                       placeholder="備考"
-                                                       <?= !$isChecked ? 'disabled' : '' ?>>
                                             </td>
                                         </tr>
                                         <?php endforeach; ?>
@@ -342,18 +339,7 @@ if ($selectedEventId) {
                                 </table>
                             </div>
                             
-                            <div class="d-flex justify-content-between align-items-center mt-3">
-                                <div>
-                                    <button type="button" class="btn btn-outline-secondary" onclick="selectAll()">
-                                        全員選択
-                                    </button>
-                                    <button type="button" class="btn btn-outline-secondary" onclick="clearAll()">
-                                        全員解除
-                                    </button>
-                                    <button type="button" class="btn btn-outline-info" onclick="setEventTime()">
-                                        イベント時間を設定
-                                    </button>
-                                </div>
+                            <div class="d-flex justify-content-end mt-3">
                                 <button type="submit" class="btn btn-primary">
                                     保存
                                 </button>
@@ -364,8 +350,8 @@ if ($selectedEventId) {
                 <?php else: ?>
                 <div class="card">
                     <div class="card-body text-center">
-                        <h5>イベントを選択してください</h5>
-                        <p class="text-muted">左側からイベントを選択すると、出勤時間の入力が可能になります。</p>
+                        <h5>日付を選択してください</h5>
+                        <p class="text-muted">左側から出勤日を選択すると、出勤時間の入力が可能になります。</p>
                     </div>
                 </div>
                 <?php endif; ?>
@@ -374,73 +360,5 @@ if ($selectedEventId) {
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // チェックボックスの状態に応じて入力フィールドを有効/無効にする
-        document.querySelectorAll('.availability-check').forEach(checkbox => {
-            checkbox.addEventListener('change', function() {
-                const userId = this.dataset.userId;
-                const row = this.closest('tr');
-                const selects = row.querySelectorAll('select, input[type="text"]');
-                
-                selects.forEach(select => {
-                    select.disabled = !this.checked;
-                    if (!this.checked) {
-                        if (select.tagName === 'SELECT') {
-                            select.value = '';
-                        } else {
-                            select.value = '';
-                        }
-                    }
-                });
-            });
-        });
-        
-        function selectAll() {
-            document.querySelectorAll('.availability-check').forEach(checkbox => {
-                checkbox.checked = true;
-                checkbox.dispatchEvent(new Event('change'));
-            });
-        }
-        
-        function clearAll() {
-            document.querySelectorAll('.availability-check').forEach(checkbox => {
-                checkbox.checked = false;
-                checkbox.dispatchEvent(new Event('change'));
-            });
-        }
-        
-        function setEventTime() {
-            const startTime = '<?= $selectedEvent['start_time'] ?? '' ?>';
-            const endTime = '<?= $selectedEvent['end_time'] ?? '' ?>';
-            
-            if (startTime) {
-                const startParts = startTime.split(':');
-                document.querySelectorAll('select[name*="[start_hour]"]').forEach(select => {
-                    if (!select.disabled) {
-                        select.value = startParts[0];
-                    }
-                });
-                document.querySelectorAll('select[name*="[start_minute]"]').forEach(select => {
-                    if (!select.disabled) {
-                        select.value = startParts[1];
-                    }
-                });
-            }
-            
-            if (endTime) {
-                const endParts = endTime.split(':');
-                document.querySelectorAll('select[name*="[end_hour]"]').forEach(select => {
-                    if (!select.disabled) {
-                        select.value = endParts[0];
-                    }
-                });
-                document.querySelectorAll('select[name*="[end_minute]"]').forEach(select => {
-                    if (!select.disabled) {
-                        select.value = endParts[1];
-                    }
-                });
-            }
-        }
-    </script>
 </body>
 </html>

@@ -46,14 +46,23 @@ function performAutoAssignment($pdo, $eventId) {
     // 必要人数解析
     $needs = parseNeeds($event['needs']);
     
-    // 出勤可能なスタッフ取得
+    // 出勤可能なスタッフ取得（優先度：特定イベント用 > 一般的な出勤情報）
     $stmt = $pdo->prepare("
-        SELECT u.*, a.available_start_time, a.available_end_time
+        SELECT DISTINCT u.*, 
+               COALESCE(event_specific.available_start_time, general.available_start_time) as available_start_time,
+               COALESCE(event_specific.available_end_time, general.available_end_time) as available_end_time
         FROM users u
-        JOIN availability a ON u.id = a.user_id
-        WHERE a.event_id = ? AND a.available = 1
+        LEFT JOIN availability general ON u.id = general.user_id 
+            AND general.work_date = ? 
+            AND general.available = 1 
+            AND (general.event_id IS NULL OR general.event_id = 0)
+        LEFT JOIN availability event_specific ON u.id = event_specific.user_id 
+            AND event_specific.work_date = ? 
+            AND event_specific.available = 1 
+            AND event_specific.event_id = ?
+        WHERE (general.id IS NOT NULL OR event_specific.id IS NOT NULL)
     ");
-    $stmt->execute([$eventId]);
+    $stmt->execute([$event['event_date'], $event['event_date'], $eventId]);
     $availableUsers = $stmt->fetchAll();
     
     // PHP側で五十音順にソート

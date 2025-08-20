@@ -142,6 +142,55 @@ body {
     .table-responsive {
         font-size: 0.875rem;
     }
+}
+
+/* ランナースキル表示のスタイル */
+.runner-skills {
+    border-left: 3px solid #007bff;
+    padding-left: 8px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+
+.general-skills {
+    border-left: 2px solid #6c757d;
+    padding-left: 8px;
+    margin-top: 6px;
+}
+
+.skill-item {
+    font-size: 0.85rem;
+    line-height: 1.3;
+}
+
+.skills-compact {
+    max-width: 200px;
+    font-size: 0.8rem;
+}
+
+.skills-compact .badge {
+    font-size: 0.65rem;
+    margin-bottom: 2px;
+}
+
+.runner-skills .fw-bold {
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+}
+
+.general-skills .fw-bold {
+    font-size: 0.75rem;
+}
+
+/* バッジ間の余白調整 */
+.skills-compact .d-flex.gap-1 {
+    gap: 4px !important;
+}
+@media (max-width: 768px) {
+    .table-responsive {
+        font-size: 0.875rem;
+    }
     
     .btn-group {
         flex-direction: column;
@@ -169,6 +218,41 @@ body {
 .event-type-badge {
     font-size: 0.8rem;
     padding: 0.25rem 0.5rem;
+}
+
+/* ランナー選択ハイライト */
+.runner-highlight {
+    background-color: #e3f2fd !important;
+    border: 2px solid #1976d2 !important;
+    border-radius: 8px !important;
+    padding: 10px !important;
+    transition: all 0.3s ease;
+}
+
+.runner-highlight .form-label {
+    color: #1976d2 !important;
+    font-weight: bold !important;
+}
+
+.runner-highlight .form-control {
+    border-color: #1976d2 !important;
+}
+
+.runner-highlight .form-control:focus {
+    border-color: #1976d2 !important;
+    box-shadow: 0 0 0 0.2rem rgba(25, 118, 210, 0.25) !important;
+}
+
+/* 会場バッジ */
+.venue-badge {
+    font-size: 0.8rem;
+    padding: 0.3rem 0.6rem;
+    font-weight: 500;
+}
+
+/* 会場選択フィールド */
+.venue-select {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
 }
 
 /* 統計表示 */

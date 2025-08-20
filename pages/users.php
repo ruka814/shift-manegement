@@ -18,11 +18,12 @@ if (($_POST['action'] ?? '') === 'add_user') {
     try {
         // バリデーション
         $name = trim($_POST['name'] ?? '');
+        $furigana = trim($_POST['furigana'] ?? '');
         $gender = $_POST['gender'] ?? '';
-        $max_workdays = $_POST['max_workdays'] ?? 0;
+        $max_workdays = 10; // デフォルト値を10日に設定
         $is_rank = $_POST['is_rank'] ?? '';
         
-        error_log("users.php: 受信データ - name: '{$name}', gender: '{$gender}', is_rank: '{$is_rank}'");
+        error_log("users.php: 受信データ - name: '{$name}', furigana: '{$furigana}', gender: '{$gender}', is_rank: '{$is_rank}'");
         
         if (empty($name)) {
             throw new Exception('名前は必須項目です。');
@@ -34,14 +35,37 @@ if (($_POST['action'] ?? '') === 'add_user') {
             throw new Exception('ランクは必須項目です。');
         }
         
-        $stmt = $pdo->prepare("INSERT INTO users (name, gender, is_highschool, max_workdays, is_rank) VALUES (?, ?, ?, ?, ?)");
-        $result = $stmt->execute([
-            $name,
-            $gender,
-            isset($_POST['is_highschool']) ? 1 : 0,
-            $max_workdays,
-            $is_rank
-        ]);
+        // furigana列が存在するかチェック
+        try {
+            $checkStmt = $pdo->query("SHOW COLUMNS FROM users LIKE 'furigana'");
+            $hasFurigana = $checkStmt->rowCount() > 0;
+        } catch (Exception $e) {
+            $hasFurigana = false;
+        }
+        
+        if ($hasFurigana) {
+            if (empty($furigana)) {
+                throw new Exception('ふりがなは必須項目です。');
+            }
+            $stmt = $pdo->prepare("INSERT INTO users (name, furigana, gender, is_highschool, max_workdays, is_rank) VALUES (?, ?, ?, ?, ?, ?)");
+            $result = $stmt->execute([
+                $name,
+                $furigana,
+                $gender,
+                isset($_POST['is_highschool']) ? 1 : 0,
+                $max_workdays,
+                $is_rank
+            ]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO users (name, gender, is_highschool, max_workdays, is_rank) VALUES (?, ?, ?, ?, ?)");
+            $result = $stmt->execute([
+                $name,
+                $gender,
+                isset($_POST['is_highschool']) ? 1 : 0,
+                $max_workdays,
+                $is_rank
+            ]);
+        }
         
         if ($result) {
             $newUserId = $pdo->lastInsertId();
@@ -163,12 +187,20 @@ if (!empty($_POST) && !in_array($_POST['action'] ?? '', ['add_user', 'delete_use
 $stmt = $pdo->query("SELECT * FROM users");
 $users = $stmt->fetchAll();
 
-// PHP側で五十音順にソート
+// PHP側でランク別かつ五十音順にソート
 $users = sortUsersByRankAndName($users);
 
 // タスクタイプ取得
 $stmt = $pdo->query("SELECT * FROM task_types ORDER BY name COLLATE utf8mb4_unicode_ci");
 $taskTypes = $stmt->fetchAll();
+
+// furigana列が存在するかチェック
+try {
+    $checkStmt = $pdo->query("SHOW COLUMNS FROM users LIKE 'furigana'");
+    $hasFuriganaColumn = $checkStmt->rowCount() > 0;
+} catch (Exception $e) {
+    $hasFuriganaColumn = false;
+}
 ?>
 
 <!DOCTYPE html>
@@ -212,7 +244,6 @@ $taskTypes = $stmt->fetchAll();
                                 <th>名前</th>
                                 <th>性別</th>
                                 <th>高校生</th>
-                                <th>出勤上限</th>
                                 <th>ランク</th>
                                 <th>スキル</th>
                                 <th>操作</th>
@@ -226,7 +257,7 @@ $taskTypes = $stmt->fetchAll();
                                 if ($previousRank === 'ランナー' && $user['is_rank'] !== 'ランナー'):
                             ?>
                             <tr class="table-secondary">
-                                <td colspan="7" class="text-center fw-bold">
+                                <td colspan="6" class="text-center fw-bold">
                                     <i class="fas fa-minus"></i> ランナー以外 <i class="fas fa-minus"></i>
                                 </td>
                             </tr>
@@ -234,7 +265,7 @@ $taskTypes = $stmt->fetchAll();
                                 elseif ($previousRank === null && $user['is_rank'] === 'ランナー'):
                             ?>
                             <tr class="table-primary">
-                                <td colspan="7" class="text-center fw-bold">
+                                <td colspan="6" class="text-center fw-bold">
                                     <i class="fas fa-star"></i> ランナー <i class="fas fa-star"></i>
                                 </td>
                             </tr>
@@ -242,7 +273,7 @@ $taskTypes = $stmt->fetchAll();
                                 elseif ($previousRank === null && $user['is_rank'] !== 'ランナー'):
                             ?>
                             <tr class="table-secondary">
-                                <td colspan="7" class="text-center fw-bold">
+                                <td colspan="6" class="text-center fw-bold">
                                     <i class="fas fa-minus"></i> ランナー以外 <i class="fas fa-minus"></i>
                                 </td>
                             </tr>
@@ -251,36 +282,44 @@ $taskTypes = $stmt->fetchAll();
                                 $previousRank = $user['is_rank'];
                             ?>
                             <tr>
-                                <td><?= h($user['name']) ?></td>
+                                <td>
+                                    <div class="fw-bold"><?= h($user['name']) ?></div>
+                                    <?php if (isset($user['furigana']) && !empty($user['furigana'])): ?>
+                                    <small class="text-muted"><?= h($user['furigana']) ?></small>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?= getGenderText($user['gender']) ?></td>
                                 <td><?= $user['is_highschool'] ? 'はい' : 'いいえ' ?></td>
-                                <td><?= h($user['max_workdays']) ?>日</td>
                                 <td><?= getRankBadge($user['is_rank']) ?></td>
                                 <td>
                                     <div class="skills-compact">
-                                        <?php
-                                        $stmt = $pdo->prepare("
-                                            SELECT tt.name, s.skill_level 
-                                            FROM skills s 
-                                            JOIN task_types tt ON s.task_type_id = tt.id 
-                                            WHERE s.user_id = ?
-                                            ORDER BY tt.name
-                                        ");
-                                        $stmt->execute([$user['id']]);
-                                        $skills = $stmt->fetchAll();
-                                        
-                                        if (count($skills) > 0):
-                                            foreach ($skills as $skill):
-                                        ?>
-                                            <div class="skill-item">
-                                                <small class="text-muted"><?= h($skill['name']) ?>:</small>
-                                                <?= getSkillBadge($skill['skill_level']) ?>
-                                            </div>
-                                        <?php 
-                                            endforeach;
-                                        else:
-                                        ?>
-                                            <small class="text-muted">スキル未設定</small>
+                                        <?php if (isRunner($user['is_rank'])): ?>
+                                            <?= getRunnerSkillDisplay($user['id'], $pdo) ?>
+                                        <?php else: ?>
+                                            <?php
+                                            $stmt = $pdo->prepare("
+                                                SELECT tt.name, s.skill_level 
+                                                FROM skills s 
+                                                JOIN task_types tt ON s.task_type_id = tt.id 
+                                                WHERE s.user_id = ?
+                                                ORDER BY tt.name
+                                            ");
+                                            $stmt->execute([$user['id']]);
+                                            $skills = $stmt->fetchAll();
+                                            
+                                            if (count($skills) > 0):
+                                                foreach ($skills as $skill):
+                                            ?>
+                                                <div class="skill-item">
+                                                    <small class="text-muted"><?= h($skill['name']) ?>:</small>
+                                                    <?= getSkillBadge($skill['skill_level']) ?>
+                                                </div>
+                                            <?php 
+                                                endforeach;
+                                            else:
+                                            ?>
+                                                <small class="text-muted">スキル未設定</small>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -322,6 +361,13 @@ $taskTypes = $stmt->fetchAll();
                             <input type="text" class="form-control" name="name" required>
                         </div>
                         
+                        <?php if ($hasFuriganaColumn): ?>
+                        <div class="mb-3">
+                            <label class="form-label">ふりがな</label>
+                            <input type="text" class="form-control" name="furigana" placeholder="ひらがなで入力してください" required>
+                        </div>
+                        <?php endif; ?>
+                        
                         <div class="mb-3">
                             <label class="form-label">性別</label>
                             <select class="form-select" name="gender" required>
@@ -338,11 +384,6 @@ $taskTypes = $stmt->fetchAll();
                                     高校生
                                 </label>
                             </div>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label class="form-label">出勤上限日数</label>
-                            <input type="number" class="form-control" name="max_workdays" value="10" min="1" max="31">
                         </div>
                         
                         <div class="mb-3">
@@ -386,12 +427,21 @@ $taskTypes = $stmt->fetchAll();
                                 <div class="card border-light">
                                     <div class="card-body p-3">
                                         <label class="form-label fw-bold"><?= h($taskType['name']) ?></label>
+                                        <?php if (in_array($taskType['name'], ['コースランナー', 'ブッフェランナー'])): ?>
+                                        <!-- ランナースキルは二択 -->
+                                        <select class="form-select" name="skills[<?= $taskType['id'] ?>]">
+                                            <option value="">できない</option>
+                                            <option value="できる" class="text-success">✓ できる</option>
+                                        </select>
+                                        <?php else: ?>
+                                        <!-- 一般スキルは従来通り -->
                                         <select class="form-select" name="skills[<?= $taskType['id'] ?>]">
                                             <option value="">未設定</option>
                                             <option value="できる" class="text-success">✓ できる</option>
                                             <option value="まあまあできる" class="text-warning">○ まあまあできる</option>
                                             <option value="できない" class="text-danger">× できない</option>
                                         </select>
+                                        <?php endif; ?>
                                         <?php if (!empty($taskType['description'])): ?>
                                         <small class="text-muted"><?= h($taskType['description']) ?></small>
                                         <?php endif; ?>

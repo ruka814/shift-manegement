@@ -48,3 +48,18 @@ yarn-error.log
 # アップロードファイル（もしあれば）
 uploads/
 files/
+
+# 実験・セットアップファイル
+add_*.php
+setup_*.php
+check_*.php
+fix_*.php
+update_*.php
+debug_*.php
+
+# 一時的なファイル
+getMessage
+test_*.php
+
+# データベースセットアップファイル
+database/*.sql
