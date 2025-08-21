@@ -360,3 +360,21 @@ body {
         color: #000 !important;
     }
 }
+
+/* 5つのカードを横並びにするためのグリッド */
+.col-md-2_4 {
+    width: 20%;
+    flex: 0 0 20%;
+    max-width: 20%;
+    padding-right: 0.75rem;
+    padding-left: 0.75rem;
+}
+
+@media (max-width: 768px) {
+    .col-md-2_4 {
+        width: 100%;
+        flex: 0 0 100%;
+        max-width: 100%;
+        margin-bottom: 1rem;
+    }
+}

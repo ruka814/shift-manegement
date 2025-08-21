@@ -506,4 +506,182 @@ function getVenueBadge($venue) {
     $badgeClass = getVenueBadgeClass($venue);
     return "<span class=\"badge {$badgeClass}\">" . h($venue) . "</span>";
 }
+
+/**
+ * 自動シフト作成機能
+ */
+function performAutoAssignment($pdo, $eventId) {
+    // イベント情報取得
+    $stmt = $pdo->prepare("SELECT * FROM events WHERE id = ?");
+    $stmt->execute([$eventId]);
+    $event = $stmt->fetch();
+    
+    if (!$event) {
+        throw new Exception('イベントが見つかりません');
+    }
+    
+    // 必要人数の解析
+    $needs = parseNeeds($event['needs']);
+    if (empty($needs)) {
+        throw new Exception('必要人数が設定されていません');
+    }
+    
+    // 出勤可能なスタッフを取得
+    $availableUsers = getAvailableUsers($pdo, $eventId, $event['event_date'], $event['start_time'], $event['end_time']);
+    
+    if (empty($availableUsers)) {
+        throw new Exception('出勤可能なスタッフがいません');
+    }
+    
+    // 役割別に自動割当を実行
+    $assignments = [];
+    $assignedUserIds = [];
+    
+    foreach ($needs as $role => $need) {
+        $assignments[$role] = [];
+        
+        // この役割に対応可能なスタッフを取得
+        $candidateUsers = getCandidateUsersForRole($pdo, $availableUsers, $role, $assignedUserIds);
+        
+        // スキルレベルとランクでソート（優先度順）
+        $candidateUsers = sortCandidatesByPriority($candidateUsers, $role);
+        
+        // 必要最小人数まで割当
+        $assignedCount = 0;
+        foreach ($candidateUsers as $user) {
+            if ($assignedCount >= $need['min'] || in_array($user['id'], $assignedUserIds)) {
+                continue;
+            }
+            
+            // スキルレベルを取得
+            $skillLevel = getUserSkillLevel($pdo, $user['id'], $role);
+            if ($skillLevel === 'できない') {
+                continue; // 「できない」スタッフは割当しない
+            }
+            
+            $assignments[$role][] = [
+                'user' => $user,
+                'skill_level' => $skillLevel
+            ];
+            
+            $assignedUserIds[] = $user['id'];
+            $assignedCount++;
+        }
+    }
+    
+    return [
+        'event' => $event,
+        'assignments' => $assignments,
+        'needs' => $needs,
+        'available_users' => $availableUsers,
+        'is_saved' => false
+    ];
+}
+
+/**
+ * 出勤可能なスタッフを取得
+ */
+function getAvailableUsers($pdo, $eventId, $eventDate, $eventStartTime, $eventEndTime) {
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT u.id, u.name, u.furigana, u.gender, u.is_rank, u.is_highschool,
+               a.available_start_time, a.available_end_time
+        FROM users u
+        JOIN availability a ON u.id = a.user_id
+        WHERE a.work_date = ? 
+          AND a.available = 1
+          AND (a.event_id IS NULL OR a.event_id = 0 OR a.event_id = ?)
+          AND TIME(a.available_start_time) <= TIME(?)
+          AND TIME(a.available_end_time) >= TIME(?)
+        ORDER BY u.is_rank DESC, u.furigana
+    ");
+    $stmt->execute([$eventDate, $eventId, $eventEndTime, $eventStartTime]);
+    
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * 特定の役割に対応可能なスタッフを取得
+ */
+function getCandidateUsersForRole($pdo, $availableUsers, $role, $excludeUserIds = []) {
+    $candidates = [];
+    
+    foreach ($availableUsers as $user) {
+        if (in_array($user['id'], $excludeUserIds)) {
+            continue;
+        }
+        
+        // スキルレベルをチェック
+        $skillLevel = getUserSkillLevel($pdo, $user['id'], $role);
+        if ($skillLevel !== 'できない') {
+            $user['skill_level'] = $skillLevel;
+            $candidates[] = $user;
+        }
+    }
+    
+    return $candidates;
+}
+
+/**
+ * ユーザーの特定役割に対するスキルレベルを取得
+ */
+function getUserSkillLevel($pdo, $userId, $role) {
+    $stmt = $pdo->prepare("
+        SELECT s.skill_level
+        FROM skills s
+        JOIN task_types tt ON s.task_type_id = tt.id
+        WHERE s.user_id = ? AND tt.name = ?
+    ");
+    $stmt->execute([$userId, $role]);
+    
+    $result = $stmt->fetch();
+    return $result ? $result['skill_level'] : 'できない';
+}
+
+/**
+ * 候補者を優先度順にソート
+ */
+function sortCandidatesByPriority($candidates, $role) {
+    usort($candidates, function($a, $b) {
+        // 1. スキルレベル優先（できる > まあまあできる > できない）
+        $skillPriorityA = getSkillPriority($a['skill_level']);
+        $skillPriorityB = getSkillPriority($b['skill_level']);
+        
+        if ($skillPriorityA !== $skillPriorityB) {
+            return $skillPriorityB - $skillPriorityA; // 高い優先度が先
+        }
+        
+        // 2. ランク優先（ランナー > その他）
+        $rankPriorityA = ($a['is_rank'] === 'ランナー') ? 1 : 0;
+        $rankPriorityB = ($b['is_rank'] === 'ランナー') ? 1 : 0;
+        
+        if ($rankPriorityA !== $rankPriorityB) {
+            return $rankPriorityB - $rankPriorityA;
+        }
+        
+        // 3. 五十音順
+        $nameA = !empty($a['furigana']) ? $a['furigana'] : $a['name'];
+        $nameB = !empty($b['furigana']) ? $b['furigana'] : $b['name'];
+        
+        return strcmp(mb_convert_kana($nameA, 'c', 'UTF-8'), mb_convert_kana($nameB, 'c', 'UTF-8'));
+    });
+    
+    return $candidates;
+}
+
+/**
+ * スキルレベルの優先度を数値で取得
+ */
+function getSkillPriority($skillLevel) {
+    switch ($skillLevel) {
+        case 'できる':
+            return 3;
+        case 'まあまあできる':
+            return 2;
+        case 'できない':
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 ?>

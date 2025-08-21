@@ -23,6 +23,7 @@ require_once 'includes/functions.php';
                 <a class="nav-link" href="pages/events.php">イベント管理</a>
                 <a class="nav-link" href="pages/availability.php">出勤入力</a>
                 <a class="nav-link" href="pages/shift_assignment.php">シフト作成</a>
+                <a class="nav-link" href="pages/saved_shifts.php">保存済みシフト</a>
             </div>
         </div>
     </nav>
@@ -36,7 +37,7 @@ require_once 'includes/functions.php';
         </div>
 
         <div class="row mt-4">
-            <div class="col-md-3">
+            <div class="col-md-2_4">
                 <div class="card text-center">
                     <div class="card-body">
                         <h5 class="card-title">👥 スタッフ管理</h5>
@@ -45,7 +46,7 @@ require_once 'includes/functions.php';
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2_4">
                 <div class="card text-center">
                     <div class="card-body">
                         <h5 class="card-title">🎉 イベント管理</h5>
@@ -54,7 +55,7 @@ require_once 'includes/functions.php';
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2_4">
                 <div class="card text-center">
                     <div class="card-body">
                         <h5 class="card-title">⏰ 出勤入力</h5>
@@ -63,12 +64,21 @@ require_once 'includes/functions.php';
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2_4">
                 <div class="card text-center">
                     <div class="card-body">
                         <h5 class="card-title">📊 シフト作成</h5>
                         <p class="card-text">自動割当・出力</p>
                         <a href="pages/shift_assignment.php" class="btn btn-success">作成画面へ</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2_4">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title">📋 保存済みシフト</h5>
+                        <p class="card-text">シフト履歴・再利用</p>
+                        <a href="pages/saved_shifts.php" class="btn btn-info">一覧表示へ</a>
                     </div>
                 </div>
             </div>

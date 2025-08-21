@@ -221,6 +221,7 @@ try {
                 <a class="nav-link" href="events.php">イベント管理</a>
                 <a class="nav-link" href="availability.php">出勤入力</a>
                 <a class="nav-link" href="shift_assignment.php">シフト作成</a>
+                <a class="nav-link" href="saved_shifts.php">保存済みシフト</a>
             </div>
         </div>
     </nav>

@@ -2,11 +2,18 @@
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
+// セッション開始
+session_start();
+
+// CSRFトークン生成
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 // イベント管理画面
 $message = '';
 
 // セッションからメッセージを取得
-session_start();
 if (isset($_SESSION['message'])) {
     $message = $_SESSION['message'];
     unset($_SESSION['message']);
@@ -15,6 +22,55 @@ if (isset($_SESSION['message'])) {
 // イベント追加処理
 if ($_POST['action'] ?? '' === 'add_event') {
     try {
+        // リクエストID生成（タイムスタンプ + ランダム値）
+        $requestId = $_POST['request_id'] ?? (time() . '_' . bin2hex(random_bytes(8)));
+        
+        // より詳細なデバッグログ
+        error_log("=== イベント追加処理開始 (RequestID: {$requestId}) ===");
+        error_log("Request Method: " . $_SERVER['REQUEST_METHOD']);
+        error_log("User Agent: " . ($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown'));
+        error_log("Referer: " . ($_SERVER['HTTP_REFERER'] ?? 'None'));
+        error_log("Request Time: " . date('Y-m-d H:i:s'));
+        error_log("Session ID: " . session_id());
+        error_log("POST データ: " . json_encode($_POST));
+        
+        // 処理済みリクエストチェック
+        $processedKey = 'processed_request_' . $requestId;
+        if (isset($_SESSION[$processedKey])) {
+            error_log("events.php: 処理済みリクエストを検出 - RequestID: {$requestId}");
+            throw new Exception('このリクエストは既に処理済みです。');
+        }
+        
+        // リクエストを処理中としてマーク
+        $_SESSION[$processedKey] = time();
+        
+        // 古い処理済みリクエストのクリーンアップ（5分以上前のものを削除）
+        $cleanupTime = time() - 300; // 5分前
+        foreach (array_keys($_SESSION) as $key) {
+            if (strpos($key, 'processed_request_') === 0 && $_SESSION[$key] < $cleanupTime) {
+                unset($_SESSION[$key]);
+                error_log("events.php: 古い処理済みリクエストをクリーンアップ: {$key}");
+            }
+        }
+        
+        // CSRFトークンの検証
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            error_log("CSRFトークンエラー - 送信: " . ($_POST['csrf_token'] ?? 'なし') . ", セッション: " . ($_SESSION['csrf_token'] ?? 'なし'));
+            throw new Exception('不正なリクエストです。ページを再読み込みして再度お試しください。');
+        }
+        
+        // 二重送信防止：同じトークンでの連続送信をチェック
+        $submitKey = 'last_submit_token_' . $_POST['csrf_token'];
+        if (isset($_SESSION[$submitKey])) {
+            error_log("二重送信検出: submitKey = " . $submitKey);
+            error_log("既存セッションキー: " . print_r(array_keys($_SESSION), true));
+            throw new Exception('既に処理済みです。重複した送信を防止しました。');
+        }
+        
+        // 送信トークンを記録
+        $_SESSION[$submitKey] = time(); // タイムスタンプも記録
+        error_log("送信トークンを記録: " . $submitKey . " = " . $_SESSION[$submitKey]);
+        
         // デバッグ用ログ
         error_log("events.php: イベント追加処理開始（新規作成）");
         error_log("events.php: POSTデータ: " . json_encode($_POST));
@@ -54,7 +110,51 @@ if ($_POST['action'] ?? '' === 'add_event') {
         $start_time = sprintf('%02d:%02d', $_POST['start_hour'], $_POST['start_minute']);
         $end_time = sprintf('%02d:%02d', $_POST['end_hour'], $_POST['end_minute']);
         
-        error_log("events.php: 準備されたデータ - 日付: {$_POST['event_date']}, 開始: {$start_time}, 終了: {$end_time}, 種別: {$_POST['event_type']}");
+                error_log("events.php: 準備されたデータ - 日付: {$_POST['event_date']}, 開始: {$start_time}, 終了: {$end_time}, 種別: {$_POST['event_type']}");
+        
+        // 重複チェック: 同じ日時・種別のイベントが既に存在しないか確認
+        $duplicateCheckStmt = $pdo->prepare("
+            SELECT id FROM events 
+            WHERE event_date = ? AND start_time = ? AND end_time = ? AND event_type = ?
+            LIMIT 1
+        ");
+        $duplicateCheckStmt->execute([
+            $_POST['event_date'],
+            $start_time,
+            $end_time,
+            $_POST['event_type']
+        ]);
+        
+        if ($duplicateCheckStmt->fetch()) {
+            error_log("events.php: 重複イベントを検出 - 追加を中止");
+            throw new Exception('同じ日時・種別のイベントが既に存在します。重複を防止しました。');
+        }
+        
+        error_log("events.php: 重複チェック完了 - 問題なし");
+        
+        // トランザクション開始
+        $pdo->beginTransaction();
+        error_log("events.php: トランザクション開始");
+        
+        try {
+            // 再度重複チェック（トランザクション内で排他的に）
+            $duplicateCheckStmt = $pdo->prepare("
+                SELECT id FROM events 
+                WHERE event_date = ? AND start_time = ? AND end_time = ? AND event_type = ?
+                FOR UPDATE
+            ");
+            $duplicateCheckStmt->execute([
+                $_POST['event_date'],
+                $start_time,
+                $end_time,
+                $_POST['event_type']
+            ]);
+            
+            if ($duplicateCheckStmt->fetch()) {
+                $pdo->rollBack();
+                error_log("events.php: トランザクション内で重複を検出 - ロールバック");
+                throw new Exception('同じ日時・種別のイベントが既に存在します。重複を防止しました。');
+            }
         
         // total_staff_requiredカラムの存在確認
         $hasTotal = false;
@@ -86,23 +186,39 @@ if ($_POST['action'] ?? '' === 'add_event') {
                 $_POST['description'] ?? '',
                 $totalStaffRequired
             ]);
+            
+            if ($result) {
+                $newEventId = $pdo->lastInsertId();
+                $pdo->commit();
+                error_log("events.php: トランザクションコミット完了 - ID: {$newEventId}");
+                
+                // 成功時に送信トークンをクリア
+                unset($_SESSION[$submitKey]);
+                
+                // 新しいCSRFトークンを生成
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                
+                // セッションにメッセージを保存してリダイレクト
+                $_SESSION['message'] = showAlert('success', "イベントを追加しました。（ID: {$newEventId}）");
+                header('Location: events.php');
+                exit;
+            } else {
+                $pdo->rollBack();
+                error_log("events.php: データ挿入失敗 - ロールバック");
+                throw new Exception('イベントの追加に失敗しました。');
+            }
         } else {
+            $pdo->rollBack();
             // total_staff_requiredカラムがない場合はエラー
             throw new Exception('データベースに総必要人数フィールドがありません。システム管理者にお問い合わせください。');
         }
         
-        if ($result) {
-            $newEventId = $pdo->lastInsertId();
-            error_log("events.php: イベント追加成功 - ID: {$newEventId}");
-            
-            // セッションにメッセージを保存してリダイレクト
-            session_start();
-            $_SESSION['message'] = showAlert('success', "イベントを追加しました。（ID: {$newEventId}）");
-            header('Location: events.php');
-            exit;
-        } else {
-            throw new Exception('イベントの追加に失敗しました。');
+        } catch (Exception $dbException) {
+            $pdo->rollBack();
+            error_log("events.php: データベース例外でロールバック: " . $dbException->getMessage());
+            throw $dbException;
         }
+        
     } catch(Exception $e) {
         error_log("events.php: イベント追加エラー: " . $e->getMessage());
         $message = showAlert('danger', 'エラーが発生しました: ' . $e->getMessage());
@@ -115,6 +231,11 @@ if ($_POST['action'] ?? '' === 'add_event') {
 // イベント編集処理
 if ($_POST['action'] ?? '' === 'edit_event') {
     try {
+        // CSRFトークンの検証
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            throw new Exception('不正なリクエストです。ページを再読み込みして再度お試しください。');
+        }
+        
         // デバッグ用ログ
         error_log("events.php: イベント編集処理開始");
         error_log("events.php: 編集POSTデータ: " . json_encode($_POST));
@@ -198,8 +319,10 @@ if ($_POST['action'] ?? '' === 'edit_event') {
         
         $message = showAlert('success', 'イベントを更新しました。');
         
+        // 新しいCSRFトークンを生成
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        
         // セッションにメッセージを保存してリダイレクト
-        session_start();
         $_SESSION['message'] = $message;
         header('Location: events.php');
         exit;
@@ -211,27 +334,32 @@ if ($_POST['action'] ?? '' === 'edit_event') {
 // イベント削除処理
 if ($_POST['action'] ?? '' === 'delete_event') {
     try {
+        // CSRFトークンの検証
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            throw new Exception('不正なリクエストです。ページを再読み込みして再度お試しください。');
+        }
+        
         $stmt = $pdo->prepare("DELETE FROM events WHERE id = ?");
         $stmt->execute([$_POST['event_id']]);
         $message = showAlert('success', 'イベントを削除しました。');
         
+        // 新しいCSRFトークンを生成
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        
         // セッションにメッセージを保存してリダイレクト
-        session_start();
         $_SESSION['message'] = $message;
         header('Location: events.php');
         exit;
-    } catch(PDOException $e) {
+    } catch(Exception $e) {
         $message = showAlert('danger', 'エラーが発生しました: ' . $e->getMessage());
+    } catch(PDOException $e) {
+        $message = showAlert('danger', 'データベースエラー: ' . $e->getMessage());
     }
 }
 
 // イベント一覧取得
 try {
     error_log("events.php: イベント一覧取得開始");
-    
-    // まず基本的なフィールドで試行
-    $stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, venue, needs, description FROM events ORDER BY event_date, start_time");
-    $events = $stmt->fetchAll();
     
     // total_staff_requiredカラムの存在をチェック
     $hasTotal = false;
@@ -243,15 +371,21 @@ try {
         error_log("events.php: total_staff_requiredカラムが存在しません: " . $e->getMessage());
     }
     
+    // 一回だけクエリを実行（DISTINCTで重複除去）
     if ($hasTotal) {
-        // total_staff_requiredカラムが存在する場合は再取得
-        $stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required FROM events ORDER BY event_date, start_time");
-        $events = $stmt->fetchAll();
+        $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required FROM events ORDER BY event_date, start_time");
     } else {
-        // カラムが存在しない場合はnullで初期化
+        $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description FROM events ORDER BY event_date, start_time");
+    }
+    
+    $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // カラムが存在しない場合はnullで初期化
+    if (!$hasTotal) {
         foreach ($events as &$event) {
             $event['total_staff_required'] = null;
         }
+        unset($event); // 参照を破棄
     }
     
     // venueカラムが存在しない場合の対応
@@ -260,8 +394,31 @@ try {
             $event['venue'] = '';
         }
     }
+    unset($event); // 参照を破棄
+    
+    error_log("events.php: 重複削除前 " . count($events) . "件のイベント");
+    
+    // 重複削除（念のため）
+    $uniqueEvents = [];
+    $seenIds = [];
+    foreach ($events as $event) {
+        if (!in_array($event['id'], $seenIds)) {
+            $uniqueEvents[] = $event;
+            $seenIds[] = $event['id'];
+        }
+    }
+    
+    error_log("events.php: 重複削除後 " . count($uniqueEvents) . "件のイベント");
+    if (count($events) !== count($uniqueEvents)) {
+        error_log("events.php: " . (count($events) - count($uniqueEvents)) . "件の重複を削除しました");
+    }
+    $events = $uniqueEvents;
     
     error_log("events.php: " . count($events) . "件のイベントを取得しました");
+    
+    // デバッグ用：イベントIDをログ出力
+    $eventIds = array_map(function($event) { return $event['id']; }, $events);
+    error_log("events.php: イベントID一覧: " . implode(', ', $eventIds));
     
 } catch(PDOException $e) {
     error_log("events.php: イベント取得エラー: " . $e->getMessage());
@@ -292,6 +449,7 @@ $taskTypes = $stmt->fetchAll();
                 <a class="nav-link active" href="events.php">イベント管理</a>
                 <a class="nav-link" href="availability.php">出勤入力</a>
                 <a class="nav-link" href="shift_assignment.php">シフト作成</a>
+                <a class="nav-link" href="saved_shifts.php">保存済みシフト</a>
             </div>
         </div>
     </nav>
@@ -391,13 +549,15 @@ $taskTypes = $stmt->fetchAll();
     <div class="modal fade" id="addEventModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
-                <form method="POST">
+                <form method="POST" id="addEventForm">
                     <div class="modal-header">
                         <h5 class="modal-title">新規イベント追加</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
                         <input type="hidden" name="action" value="add_event">
+                        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+                        <input type="hidden" name="request_id" value="<?= time() . '_' . bin2hex(random_bytes(8)) ?>">
                         
                         <div class="row">
                             <div class="col-md-6">
@@ -515,7 +675,7 @@ $taskTypes = $stmt->fetchAll();
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
-                        <button type="submit" class="btn btn-primary">追加</button>
+                        <button type="submit" class="btn btn-primary" id="addEventSubmitBtn">追加</button>
                     </div>
                 </form>
             </div>
@@ -526,7 +686,7 @@ $taskTypes = $stmt->fetchAll();
     <div class="modal fade" id="editEventModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
-                <form method="POST">
+                <form method="POST" id="editEventForm">
                     <div class="modal-header">
                         <h5 class="modal-title">イベント編集</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -534,6 +694,7 @@ $taskTypes = $stmt->fetchAll();
                     <div class="modal-body">
                         <input type="hidden" name="action" value="edit_event">
                         <input type="hidden" name="event_id" id="editEventId">
+                        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
                         
                         <div class="row">
                             <div class="col-md-6">
@@ -652,7 +813,7 @@ $taskTypes = $stmt->fetchAll();
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
-                        <button type="submit" class="btn btn-warning">更新</button>
+                        <button type="submit" class="btn btn-warning" id="editEventSubmitBtn">更新</button>
                     </div>
                 </form>
             </div>
@@ -663,7 +824,7 @@ $taskTypes = $stmt->fetchAll();
     <div class="modal fade" id="deleteModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
-                <form method="POST">
+                <form method="POST" id="deleteEventForm">
                     <div class="modal-header">
                         <h5 class="modal-title">イベント削除確認</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -671,6 +832,8 @@ $taskTypes = $stmt->fetchAll();
                     <div class="modal-body">
                         <input type="hidden" name="action" value="delete_event">
                         <input type="hidden" name="event_id" id="deleteEventId">
+                        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+                        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
                         <p><span id="deleteEventName"></span>を削除しますか？</p>
                         <div class="alert alert-warning">
                             <strong>注意:</strong> この操作は取り消せません。関連する出勤情報も削除されます。
@@ -687,8 +850,30 @@ $taskTypes = $stmt->fetchAll();
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // イベント編集用のデータ
-        const eventsData = <?= json_encode($events) ?>;
+        // ページレベルの二重送信防止
+        window.submitHistory = window.submitHistory || [];
+        window.lastSubmitTime = window.lastSubmitTime || 0;
+        
+        // beforeunloadイベントで警告（開発時のみ）
+        let formChanged = false;
+        document.addEventListener('input', function() {
+            formChanged = true;
+        });
+        
+        // ブラウザの戻るボタン対策
+        window.addEventListener('pageshow', function(event) {
+            if (event.persisted) {
+                console.log('ページがキャッシュから復元されました - フォームをリセット');
+                location.reload();
+            }
+        });
+        // イベント編集用のデータ（重複除去済み）
+        const rawEventsData = <?= json_encode($events) ?>;
+        const eventsData = rawEventsData.filter((event, index, self) => 
+            index === self.findIndex(e => e.id === event.id)
+        );
+        
+        console.log('取得したイベント数:', eventsData.length);
         
         // イベント種別に応じたランナー設定
         const eventTypeRunners = {
@@ -858,6 +1043,36 @@ $taskTypes = $stmt->fetchAll();
                 }
             });
             
+            // モーダルが閉じられた時にフォームをリセット
+            addEventModal.addEventListener('hidden.bs.modal', function() {
+                const form = this.querySelector('form');
+                if (form) {
+                    form.reset();
+                    // 送信ボタンも元に戻す
+                    const submitBtn = form.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '追加';
+                    }
+                }
+            });
+            
+            const editModal = document.getElementById('editEventModal');
+            if (editModal) {
+                editModal.addEventListener('hidden.bs.modal', function() {
+                    const form = this.querySelector('form');
+                    if (form) {
+                        form.reset();
+                        // 送信ボタンも元に戻す
+                        const submitBtn = form.querySelector('button[type="submit"]');
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = '更新';
+                        }
+                    }
+                });
+            }
+            
             // イベント種別選択のイベントリスナーを追加
             const addEventTypeSelect = document.querySelector('#addEventModal select[name="event_type"]');
             const editEventTypeSelect = document.querySelector('#editEventModal select[name="event_type"]');
@@ -876,14 +1091,52 @@ $taskTypes = $stmt->fetchAll();
             
             // フォームのバリデーション
             const forms = document.querySelectorAll('form');
+            const submittedForms = new Set(); // 送信済みフォームを追跡
+            
             forms.forEach(form => {
+                let isSubmitting = false; // 二重送信防止フラグ
+                let submitStartTime = 0; // 送信開始時刻
+                
                 form.addEventListener('submit', function(e) {
-                    // デバッグ: フォーム送信前の値を確認
+                    const currentTime = Date.now();
+                    const formId = form.getAttribute('id') || 'unknown';
                     const actionInput = form.querySelector('input[name="action"]');
+                    const action = actionInput ? actionInput.value : 'unknown';
+                    
+                    console.log(`フォーム送信試行: ${formId}, action: ${action}, time: ${currentTime}`);
+                    
+                    // 1秒以内の連続送信をブロック
+                    if (submitStartTime > 0 && (currentTime - submitStartTime) < 1000) {
+                        e.preventDefault();
+                        console.log('1秒以内の連続送信をブロックしました');
+                        alert('送信処理中です。しばらくお待ちください。');
+                        return false;
+                    }
+                    
+                    // 二重送信をチェック
+                    if (isSubmitting) {
+                        e.preventDefault();
+                        console.log('二重送信を防止しました (isSubmitting=true)');
+                        alert('既に送信処理中です。');
+                        return false;
+                    }
+                    
+                    // フォームIDベースの重複チェック
+                    const formKey = `${formId}_${action}_${currentTime}`;
+                    if (submittedForms.has(formKey.substring(0, formKey.lastIndexOf('_')))) {
+                        e.preventDefault();
+                        console.log('フォーム重複送信を防止しました');
+                        alert('このフォームは既に送信されています。');
+                        return false;
+                    }
+                    
+                    // デバッグ: フォーム送信前の値を確認
                     const eventIdInput = form.querySelector('input[name="event_id"]');
                     console.log('Form submission:', {
-                        action: actionInput ? actionInput.value : 'none',
-                        eventId: eventIdInput ? eventIdInput.value : 'none'
+                        action: action,
+                        eventId: eventIdInput ? eventIdInput.value : 'none',
+                        formId: formId,
+                        time: new Date(currentTime).toLocaleTimeString()
                     });
                     
                     // 編集フォームの場合、event_idの存在を確認
@@ -902,6 +1155,45 @@ $taskTypes = $stmt->fetchAll();
                         totalStaffInput.focus();
                         return false;
                     }
+                    
+                    // バリデーション通過後、送信フラグを設定
+                    isSubmitting = true;
+                    submitStartTime = currentTime;
+                    submittedForms.add(formKey.substring(0, formKey.lastIndexOf('_')));
+                    
+                    console.log('フォーム送信を許可:', {
+                        formId: formId,
+                        action: action,
+                        submitTime: new Date(currentTime).toLocaleTimeString()
+                    });
+                    
+                    // 送信ボタンを無効化
+                    const submitBtn = form.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        const originalText = submitBtn.textContent;
+                        submitBtn.textContent = '処理中...';
+                        submitBtn.style.opacity = '0.6';
+                        
+                        // 10秒後に強制リセット（万が一のため）
+                        setTimeout(() => {
+                            isSubmitting = false;
+                            submitStartTime = 0;
+                            if (submitBtn && submitBtn.disabled) {
+                                submitBtn.disabled = false;
+                                submitBtn.textContent = originalText;
+                                submitBtn.style.opacity = '1';
+                                console.log('送信ボタンを強制リセットしました');
+                            }
+                        }, 10000);
+                    }
+                });
+                
+                // フォームリセット時に状態もリセット
+                form.addEventListener('reset', function() {
+                    isSubmitting = false;
+                    submitStartTime = 0;
+                    console.log('フォームリセット - 送信状態をクリア');
                 });
             });
         });

@@ -4,7 +4,7 @@ require_once '../includes/functions.php';
 
 // 日付ベース出勤可能時間入力画面
 $message = '';
-$selectedDate = $_GET['date'] ?? date('Y-m-d');
+$selectedDate = $_GET['work_date'] ?? $_GET['date'] ?? date('Y-m-d');
 
 // 出勤情報保存処理
 if ($_POST['action'] ?? '' === 'save_availability') {
@@ -152,6 +152,59 @@ if ($selectedDate) {
     <title>出勤時間入力 - シフト管理システム</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="../assets/css/style.css">
+    <style>
+        /* 日付選択の改善 */
+        .date-quick-buttons .btn {
+            transition: all 0.2s ease;
+        }
+        
+        .date-quick-buttons .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .date-quick-buttons .btn.active {
+            transform: none;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        /* 時間入力の改善 */
+        .time-part-select {
+            font-size: 0.875rem;
+        }
+        
+        .time-row {
+            gap: 2px !important;
+        }
+        
+        /* 日付入力フィールドの改善 */
+        input[type="date"] {
+            cursor: pointer;
+        }
+        
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            cursor: pointer;
+            padding: 4px;
+        }
+        
+        /* 選択された日付のハイライト */
+        .alert-info {
+            border-left: 4px solid #0d6efd;
+        }
+        
+        /* 過去日付の警告スタイル */
+        .text-warning {
+            font-weight: 500;
+        }
+        
+        /* レスポンシブ対応 */
+        @media (max-width: 768px) {
+            .btn-group-vertical .btn {
+                font-size: 0.875rem;
+                padding: 0.375rem 0.5rem;
+            }
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -162,6 +215,7 @@ if ($selectedDate) {
                 <a class="nav-link" href="events.php">イベント管理</a>
                 <a class="nav-link active" href="availability.php">出勤入力</a>
                 <a class="nav-link" href="shift_assignment.php">シフト作成</a>
+                <a class="nav-link" href="saved_shifts.php">保存済みシフト</a>
             </div>
         </div>
     </nav>
@@ -176,21 +230,71 @@ if ($selectedDate) {
                         <h5>📅 日付選択</h5>
                     </div>
                     <div class="card-body">
-                        <form method="GET">
+                        <form method="GET" id="dateForm">
                             <div class="mb-3">
                                 <label class="form-label">出勤日を選択</label>
                                 <input type="date" class="form-control" name="work_date" 
-                                       value="<?= $selectedDate ?>" onchange="this.form.submit()">
+                                       value="<?= $selectedDate ?>" 
+                                       min="<?= date('Y-m-d') ?>"
+                                       max="<?= date('Y-m-d', strtotime('+6 months')) ?>"
+                                       onchange="this.form.submit()"
+                                       required>
+                                <div class="form-text">
+                                    今日から6ヶ月先まで選択可能です
+                                </div>
                             </div>
                         </form>
                         
+                        <!-- 日付クイック選択ボタン -->
+                        <div class="mb-3">
+                            <label class="form-label small">クイック選択</label>
+                            <div class="btn-group-vertical d-grid gap-1 date-quick-buttons">
+                                <a href="?work_date=<?= date('Y-m-d') ?>" 
+                                   class="btn btn-outline-primary btn-sm <?= $selectedDate === date('Y-m-d') ? 'active' : '' ?>">
+                                    📅 今日 (<?= date('n/j') ?>)
+                                </a>
+                                <a href="?work_date=<?= date('Y-m-d', strtotime('+1 day')) ?>" 
+                                   class="btn btn-outline-primary btn-sm <?= $selectedDate === date('Y-m-d', strtotime('+1 day')) ? 'active' : '' ?>">
+                                    📅 明日 (<?= date('n/j', strtotime('+1 day')) ?>)
+                                </a>
+                                <a href="?work_date=<?= date('Y-m-d', strtotime('next Saturday')) ?>" 
+                                   class="btn btn-outline-success btn-sm <?= $selectedDate === date('Y-m-d', strtotime('next Saturday')) ? 'active' : '' ?>">
+                                    📅 次の土曜日 (<?= date('n/j', strtotime('next Saturday')) ?>)
+                                </a>
+                                <a href="?work_date=<?= date('Y-m-d', strtotime('next Sunday')) ?>" 
+                                   class="btn btn-outline-success btn-sm <?= $selectedDate === date('Y-m-d', strtotime('next Sunday')) ? 'active' : '' ?>">
+                                    📅 次の日曜日 (<?= date('n/j', strtotime('next Sunday')) ?>)
+                                </a>
+                            </div>
+                        </div>
+                        
                         <?php if ($selectedDate): ?>
-                        <div class="date-info mt-3">
-                            <h6>選択した日付</h6>
-                            <ul class="list-unstyled small">
-                                <li><strong>日付:</strong> <?= date('Y年m月d日', strtotime($selectedDate)) ?></li>
-                                <li><strong>曜日:</strong> <?= formatJapaneseWeekday($selectedDate) ?></li>
-                            </ul>
+                        <div class="alert alert-info">
+                            <h6 class="mb-2"><i class="fas fa-calendar-check"></i> 選択した日付</h6>
+                            <div class="row">
+                                <div class="col-6">
+                                    <strong>日付:</strong><br>
+                                    <?= date('Y年m月d日', strtotime($selectedDate)) ?>
+                                </div>
+                                <div class="col-6">
+                                    <strong>曜日:</strong><br>
+                                    <span class="badge <?= in_array(date('w', strtotime($selectedDate)), [0, 6]) ? 'bg-warning text-dark' : 'bg-primary' ?>">
+                                        <?= formatJapaneseWeekday($selectedDate) ?>
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <?php
+                            // 過去の日付チェック
+                            if (strtotime($selectedDate) < strtotime(date('Y-m-d'))):
+                            ?>
+                            <div class="mt-2">
+                                <small class="text-warning">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    過去の日付が選択されています
+                                </small>
+                            </div>
+                            <?php endif; ?>
                         </div>
                         <?php endif; ?>
                     </div>
@@ -360,5 +464,95 @@ if ($selectedDate) {
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 日付入力フィールドの設定
+            const dateInput = document.querySelector('input[name="work_date"]');
+            if (dateInput) {
+                // 日付変更時の処理
+                dateInput.addEventListener('change', function() {
+                    // 選択された日付をローカルストレージに保存
+                    localStorage.setItem('selectedDate', this.value);
+                    
+                    // フォーム送信前に確認
+                    const selectedDate = new Date(this.value);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    
+                    if (selectedDate < today) {
+                        if (!confirm('過去の日付が選択されています。この日付で出勤時間を入力しますか？')) {
+                            this.value = '<?= $selectedDate ?>';
+                            return false;
+                        }
+                    }
+                });
+                
+                // ページ読み込み時に保存された日付を復元
+                const savedDate = localStorage.getItem('selectedDate');
+                if (savedDate && !dateInput.value) {
+                    dateInput.value = savedDate;
+                }
+            }
+            
+            // クイック選択ボタンのハイライト
+            const quickButtons = document.querySelectorAll('.btn-outline-primary, .btn-outline-success');
+            quickButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const url = new URL(this.href);
+                    const selectedDate = url.searchParams.get('work_date');
+                    localStorage.setItem('selectedDate', selectedDate);
+                });
+            });
+            
+            // 時間入力の改善
+            const timeSelects = document.querySelectorAll('.time-part-select');
+            timeSelects.forEach(select => {
+                select.addEventListener('change', function() {
+                    // 時間選択時の自動調整機能
+                    const row = this.closest('tr');
+                    const userId = this.name.match(/\[(\d+)\]/)[1];
+                    const isStart = this.name.includes('start');
+                    
+                    if (isStart) {
+                        // 開始時間が選択された場合、終了時間の最小値を調整
+                        const startHour = row.querySelector(`[name="availability[${userId}][start_hour]"]`).value;
+                        const endHourSelect = row.querySelector(`[name="availability[${userId}][end_hour]"]`);
+                        
+                        if (startHour && endHourSelect.value && parseInt(endHourSelect.value) <= parseInt(startHour)) {
+                            // 終了時間を開始時間より後に自動調整
+                            endHourSelect.value = Math.min(parseInt(startHour) + 1, 23);
+                        }
+                    }
+                });
+            });
+            
+            // フォーム送信時の検証
+            const form = document.querySelector('form[method="POST"]');
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    const timeInputs = this.querySelectorAll('.time-part-select');
+                    let hasTimeInput = false;
+                    
+                    timeInputs.forEach(input => {
+                        if (input.value) {
+                            hasTimeInput = true;
+                        }
+                    });
+                    
+                    if (!hasTimeInput) {
+                        e.preventDefault();
+                        alert('少なくとも1人以上のスタッフの出勤時間を入力してください。');
+                        return false;
+                    }
+                    
+                    // 保存確認
+                    if (!confirm('入力した出勤時間を保存しますか？')) {
+                        e.preventDefault();
+                        return false;
+                    }
+                });
+            }
+        });
+    </script>
 </body>
 </html>
