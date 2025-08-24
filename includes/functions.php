@@ -511,25 +511,37 @@ function getVenueBadge($venue) {
  * 自動シフト作成機能
  */
 function performAutoAssignment($pdo, $eventId) {
+    error_log("=== performAutoAssignment開始 ===");
+    error_log("イベントID: " . $eventId);
+    
     // イベント情報取得
     $stmt = $pdo->prepare("SELECT * FROM events WHERE id = ?");
     $stmt->execute([$eventId]);
     $event = $stmt->fetch();
     
     if (!$event) {
+        error_log("エラー: イベントが見つかりません");
         throw new Exception('イベントが見つかりません');
     }
     
+    error_log("イベント情報: " . json_encode($event));
+    
     // 必要人数の解析
     $needs = parseNeeds($event['needs']);
+    error_log("必要人数の解析結果: " . json_encode($needs));
+    
     if (empty($needs)) {
+        error_log("エラー: 必要人数が設定されていません");
         throw new Exception('必要人数が設定されていません');
     }
     
     // 出勤可能なスタッフを取得
+    error_log("出勤可能スタッフを取得中...");
     $availableUsers = getAvailableUsers($pdo, $eventId, $event['event_date'], $event['start_time'], $event['end_time']);
+    error_log("出勤可能スタッフ数: " . count($availableUsers));
     
     if (empty($availableUsers)) {
+        error_log("エラー: 出勤可能なスタッフがいません");
         throw new Exception('出勤可能なスタッフがいません');
     }
     
@@ -537,7 +549,9 @@ function performAutoAssignment($pdo, $eventId) {
     $assignments = [];
     $assignedUserIds = [];
     
+    error_log("役割別割当を開始...");
     foreach ($needs as $role => $need) {
+        error_log("役割: {$role}, 必要人数: " . json_encode($need));
         $assignments[$role] = [];
         
         // この役割に対応可能なスタッフを取得
@@ -569,13 +583,19 @@ function performAutoAssignment($pdo, $eventId) {
         }
     }
     
-    return [
+    $result = [
         'event' => $event,
         'assignments' => $assignments,
         'needs' => $needs,
         'available_users' => $availableUsers,
         'is_saved' => false
     ];
+    
+    error_log("=== performAutoAssignment完了 ===");
+    error_log("割当結果: " . json_encode($assignments));
+    error_log("総割当人数: " . count($assignedUserIds));
+    
+    return $result;
 }
 
 /**

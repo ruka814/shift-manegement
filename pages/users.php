@@ -211,6 +211,46 @@ try {
     <title>スタッフ管理 - シフト管理システム</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="../assets/css/style.css">
+    <style>
+        /* スタッフ名のクリック可能スタイル */
+        .fw-bold a {
+            color: #0d6efd;
+            transition: color 0.2s ease;
+        }
+        
+        .fw-bold a:hover {
+            color: #0a58ca;
+            text-decoration: underline !important;
+        }
+        
+        /* 統計数値のスタイル */
+        .stat-number {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #0d6efd;
+        }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+        
+        /* 出勤履歴テーブルのレスポンシブ対応 */
+        @media (max-width: 768px) {
+            .table-responsive {
+                font-size: 0.875rem;
+            }
+            
+            .stat-number {
+                font-size: 1.25rem;
+            }
+        }
+        
+        /* ローディングアニメーション */
+        .spinner-border {
+            color: #0d6efd;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -284,7 +324,13 @@ try {
                             ?>
                             <tr>
                                 <td>
-                                    <div class="fw-bold"><?= h($user['name']) ?></div>
+                                    <div class="fw-bold">
+                                        <a href="#" class="text-decoration-none" 
+                                           onclick="showAttendanceHistory(<?= $user['id'] ?>, '<?= h($user['name']) ?>')"
+                                           title="出勤履歴を表示">
+                                            <?= h($user['name']) ?>
+                                        </a>
+                                    </div>
                                     <?php if (isset($user['furigana']) && !empty($user['furigana'])): ?>
                                     <small class="text-muted"><?= h($user['furigana']) ?></small>
                                     <?php endif; ?>
@@ -487,6 +533,32 @@ try {
         </div>
     </div>
 
+    <!-- 出勤履歴表示モーダル -->
+    <div class="modal fade" id="attendanceModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">📅 出勤履歴 - <span id="attendanceUserName"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="attendanceContent">
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">読み込み中...</span>
+                        </div>
+                        <p class="mt-2">出勤履歴を読み込んでいます...</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">閉じる</button>
+                    <button type="button" class="btn btn-primary" id="addAttendanceBtn" onclick="goToAttendanceInput()">
+                        ➕ 新規出勤入力
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         function editSkills(userId, userName) {
@@ -541,6 +613,182 @@ try {
             document.getElementById('deleteUserId').value = userId;
             document.getElementById('deleteUserName').textContent = userName;
             new bootstrap.Modal(document.getElementById('deleteModal')).show();
+        }
+        
+        // 出勤履歴表示機能
+        function showAttendanceHistory(userId, userName) {
+            console.log(`showAttendanceHistory called with userId: ${userId}, userName: ${userName}`);
+            
+            // ユーザーIDの妥当性チェック
+            if (!userId || userId === 'undefined' || userId === 'null') {
+                alert('無効なユーザーIDです。ページを再読み込みしてください。');
+                return;
+            }
+            
+            // モーダルのタイトルを設定
+            document.getElementById('attendanceUserName').textContent = userName;
+            
+            // ローディング状態を表示
+            document.getElementById('attendanceContent').innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">読み込み中...</span>
+                    </div>
+                    <p class="mt-2">出勤履歴を読み込んでいます...</p>
+                </div>
+            `;
+            
+            // モーダルを表示
+            const modal = new bootstrap.Modal(document.getElementById('attendanceModal'));
+            modal.show();
+            
+            // 出勤履歴データを取得
+            fetch(`get_attendance_history.php?user_id=${userId}`)
+                .then(response => {
+                    console.log(`API response status: ${response.status}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Received attendance data:', data);
+                    displayAttendanceHistory(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching attendance history:', error);
+                    document.getElementById('attendanceContent').innerHTML = `
+                        <div class="alert alert-danger">
+                            <h6>エラーが発生しました</h6>
+                            <p>出勤履歴の取得に失敗しました: ${error.message}</p>
+                            <small>ページを再読み込みして再度お試しください。</small>
+                        </div>
+                    `;
+                });
+        }
+        
+        // 出勤履歴の表示
+        function displayAttendanceHistory(data) {
+            const content = document.getElementById('attendanceContent');
+            
+            if (!data.attendance || data.attendance.length === 0) {
+                content.innerHTML = `
+                    <div class="text-center py-4">
+                        <div class="text-muted">
+                            <i class="fas fa-calendar-times fa-3x mb-3"></i>
+                            <h5>出勤履歴がありません</h5>
+                            <p>まだ出勤予定が入力されていません。</p>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = `
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h6>📊 出勤履歴（${data.attendance.length}件）</h6>
+                        <small class="text-muted">※出勤可能として入力された日程</small>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>日付</th>
+                                <th>曜日</th>
+                                <th>出勤時間</th>
+                                <th>イベント</th>
+                                <th>更新日時</th>
+                                <th>備考</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            data.attendance.forEach(record => {
+                const eventInfo = record.event_type ? 
+                    `<span class="badge bg-primary">${record.event_type}</span>` : 
+                    '<span class="text-muted">一般出勤</span>';
+                
+                const timeInfo = record.available_start_time && record.available_end_time ?
+                    `${record.available_start_time.substr(0, 5)} - ${record.available_end_time.substr(0, 5)}` :
+                    '<span class="text-muted">時間未設定</span>';
+                
+                const weekday = new Date(record.work_date).toLocaleDateString('ja-JP', { weekday: 'short' });
+                
+                // 更新日時の表示
+                const updatedAt = record.updated_at ? 
+                    new Date(record.updated_at).toLocaleString('ja-JP', {
+                        month: 'numeric',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    }) : 
+                    '<span class="text-muted">不明</span>';
+                
+                html += `
+                    <tr>
+                        <td>
+                            <strong>${record.work_date}</strong>
+                        </td>
+                        <td>
+                            <span class="badge ${weekday === '土' || weekday === '日' ? 'bg-warning text-dark' : 'bg-light text-dark'}">${weekday}</span>
+                        </td>
+                        <td>${timeInfo}</td>
+                        <td>${eventInfo}</td>
+                        <td>
+                            <small class="text-muted">${updatedAt}</small>
+                        </td>
+                        <td>
+                            ${record.note ? `<small class="text-muted">${record.note}</small>` : '-'}
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            
+            // 統計情報を追加
+            const stats = data.stats || {};
+            html += `
+                <div class="mt-4">
+                    <div class="card">
+                        <div class="card-body">
+                            <h6 class="card-title">📈 出勤統計</h6>
+                            <div class="row text-center">
+                                <div class="col-md-3">
+                                    <div class="stat-number">${stats.total_days || 0}</div>
+                                    <div class="stat-label">総出勤予定日数</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="stat-number">${stats.weekend_days || 0}</div>
+                                    <div class="stat-label">土日出勤</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="stat-number">${stats.event_days || 0}</div>
+                                    <div class="stat-label">イベント出勤</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="stat-number">${stats.this_month || 0}</div>
+                                    <div class="stat-label">今月の予定</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            content.innerHTML = html;
+        }
+        
+        // 出勤入力ページへ移動
+        function goToAttendanceInput() {
+            window.open('availability.php', '_blank');
         }
     </script>
 </body>

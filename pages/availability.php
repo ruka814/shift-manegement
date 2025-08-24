@@ -6,8 +6,8 @@ require_once '../includes/functions.php';
 $message = '';
 $selectedDate = $_GET['work_date'] ?? $_GET['date'] ?? date('Y-m-d');
 
-// 出勤情報保存処理
-if ($_POST['action'] ?? '' === 'save_availability') {
+// 出勤情報更新処理
+if ($_POST['action'] ?? '' === 'update_availability') {
     try {
         $pdo->beginTransaction();
         
@@ -113,7 +113,7 @@ if ($_POST['action'] ?? '' === 'save_availability') {
         }
         
         $pdo->commit();
-        $message = showAlert('success', '出勤情報を保存しました。');
+        $message = showAlert('success', '出勤情報を更新しました。');
         $selectedDate = $work_date; // 保存後も同じ日付を表示
     } catch(Exception $e) {
         $pdo->rollback();
@@ -309,7 +309,7 @@ if ($selectedDate) {
                     </div>
                     <div class="card-body">
                         <form method="POST">
-                            <input type="hidden" name="action" value="save_availability">
+                            <input type="hidden" name="action" value="update_availability">
                             <input type="hidden" name="work_date" value="<?= $selectedDate ?>">
                             
                             <div class="table-responsive">
@@ -444,8 +444,8 @@ if ($selectedDate) {
                             </div>
                             
                             <div class="d-flex justify-content-end mt-3">
-                                <button type="submit" class="btn btn-primary">
-                                    保存
+                                <button type="submit" class="btn btn-success">
+                                    <i class="fas fa-sync-alt"></i> 更新
                                 </button>
                             </div>
                         </form>
@@ -545,8 +545,8 @@ if ($selectedDate) {
                         return false;
                     }
                     
-                    // 保存確認
-                    if (!confirm('入力した出勤時間を保存しますか？')) {
+                    // 更新確認
+                    if (!confirm('入力した出勤時間を更新しますか？')) {
                         e.preventDefault();
                         return false;
                     }
