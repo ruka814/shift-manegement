@@ -19,11 +19,10 @@ if ($_POST['action'] ?? '' === 'delete_shift') {
 // 保存済みシフト一覧取得
 $stmt = $pdo->query("
     SELECT e.*, COUNT(a.id) as assigned_count,
-           MIN(a.created_at) as shift_created_at,
-           a.note as creation_method
+           MIN(a.created_at) as shift_created_at
     FROM events e
     JOIN assignments a ON e.id = a.event_id
-    GROUP BY e.id
+    GROUP BY e.id, e.event_date, e.start_time, e.end_time, e.event_type, e.venue, e.needs, e.description, e.created_at, e.updated_at
     ORDER BY e.event_date DESC, e.start_time DESC
 ");
 $savedShifts = $stmt->fetchAll();
