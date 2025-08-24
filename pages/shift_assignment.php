@@ -393,13 +393,22 @@ function getAssignmentStats($assignments) {
                         <!-- 出勤可能スタッフ表示エリア -->
                         <div id="availableStaffArea" class="mt-3"></div>
                         
-                        <form method="POST" class="mt-3" id="autoAssignForm">
-                            <input type="hidden" name="action" value="auto_assign">
-                            <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
-                            <button type="submit" class="btn btn-success w-100" id="autoAssignBtn">
-                                🎯 自動シフト作成
+                        <!-- シフト作成ボタンエリア -->
+                        <div class="mt-3">
+                            <form method="POST" id="autoAssignForm">
+                                <input type="hidden" name="action" value="auto_assign">
+                                <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
+                                <button type="submit" class="btn btn-success w-100 mb-2" id="autoAssignBtn">
+                                    🎯 自動シフト作成
+                                </button>
+                            </form>
+                            
+                            <!-- 🆕 ランダム選択ボタン -->
+                            <button type="button" class="btn btn-outline-primary w-100" id="randomSelectBtn" onclick="randomSelectStaff()" disabled>
+                                🎲 ランダム選択
                             </button>
-                        </form>
+                            <small class="text-muted d-block mt-1">※出勤可能スタッフからランダムで選択</small>
+                        </div>
                         
                         <?php if ($hasSavedShift && !$assignmentResult): ?>
                         <div class="mt-2">
@@ -824,7 +833,13 @@ function getAssignmentStats($assignments) {
                 weekday: 'short'
             });
             
+            // 🆕 グローバル変数に出勤可能スタッフデータを保存
+            currentAvailableStaff = data.available_staff;
+            
             if (data.stats.total_available === 0) {
+                // データがない場合は空の配列に設定
+                currentAvailableStaff = [];
+                
                 staffArea.innerHTML = `
                     <div class="card">
                         <div class="card-header">
@@ -919,9 +934,18 @@ function getAssignmentStats($assignments) {
             
             html += '</div></div>';
             staffArea.innerHTML = html;
+            
+            // 🆕 ランダム選択ボタンを有効化
+            const randomBtn = document.getElementById('randomSelectBtn');
+            if (randomBtn) {
+                randomBtn.disabled = false;
+            }
         }
         
         function showStaffError(message) {
+            // エラー時は空の配列に設定
+            currentAvailableStaff = [];
+            
             const staffArea = document.getElementById('availableStaffArea');
             staffArea.innerHTML = `
                 <div class="card">
@@ -934,6 +958,267 @@ function getAssignmentStats($assignments) {
                     </div>
                 </div>
             `;
+            
+            // ランダム選択ボタンを無効化
+            const randomBtn = document.getElementById('randomSelectBtn');
+            if (randomBtn) {
+                randomBtn.disabled = true;
+            }
+        }
+        
+        // 🆕 グローバル変数として出勤可能スタッフデータを保存
+        let currentAvailableStaff = [];
+        
+        // 🆕 ランダム選択機能
+        function randomSelectStaff() {
+            if (currentAvailableStaff.length === 0) {
+                alert('出勤可能スタッフのデータがありません');
+                return;
+            }
+            
+            // 選択オプションのモーダルを表示
+            showRandomSelectionModal();
+        }
+        
+        function showRandomSelectionModal() {
+            const runnerCount = currentAvailableStaff.filter(s => s.is_rank === 'ランナー').length;
+            const nonRunnerCount = currentAvailableStaff.length - runnerCount;
+            
+            const modalHtml = `
+                <div class="modal fade" id="randomSelectionModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">🎲 ランダム選択設定</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <label class="form-label">選択方法</label>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="selectionMode" id="modeTotal" value="total" checked>
+                                        <label class="form-check-label" for="modeTotal">
+                                            全体から選択
+                                        </label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="selectionMode" id="modeCategory" value="category">
+                                        <label class="form-check-label" for="modeCategory">
+                                            カテゴリ別に選択
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div id="totalSelection">
+                                    <div class="mb-3">
+                                        <label for="totalCount" class="form-label">選択人数</label>
+                                        <input type="number" class="form-control" id="totalCount" min="1" max="${currentAvailableStaff.length}" value="3">
+                                        <small class="text-muted">出勤可能: ${currentAvailableStaff.length}名（ランナー${runnerCount}名、その他${nonRunnerCount}名）</small>
+                                    </div>
+                                </div>
+                                
+                                <div id="categorySelection" style="display: none;">
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <div class="mb-3">
+                                                <label for="runnerCount" class="form-label">ランナー</label>
+                                                <input type="number" class="form-control" id="runnerCount" min="0" max="${runnerCount}" value="0">
+                                                <small class="text-muted">最大${runnerCount}名</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <div class="mb-3">
+                                                <label for="nonRunnerCount" class="form-label">その他</label>
+                                                <input type="number" class="form-control" id="nonRunnerCount" min="0" max="${nonRunnerCount}" value="0">
+                                                <small class="text-muted">最大${nonRunnerCount}名</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="balanceGender">
+                                    <label class="form-check-label" for="balanceGender">
+                                        男女バランスを考慮
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
+                                <button type="button" class="btn btn-primary" onclick="executeRandomSelection()">🎲 選択実行</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // 既存のモーダルがあれば削除
+            const existingModal = document.getElementById('randomSelectionModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+            
+            // モーダルをDOMに追加
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            
+            // モーダル表示
+            const modal = new bootstrap.Modal(document.getElementById('randomSelectionModal'));
+            modal.show();
+            
+            // 選択方法の切り替え
+            document.querySelectorAll('input[name="selectionMode"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    if (this.value === 'total') {
+                        document.getElementById('totalSelection').style.display = 'block';
+                        document.getElementById('categorySelection').style.display = 'none';
+                    } else {
+                        document.getElementById('totalSelection').style.display = 'none';
+                        document.getElementById('categorySelection').style.display = 'block';
+                    }
+                });
+            });
+        }
+        
+        function executeRandomSelection() {
+            const mode = document.querySelector('input[name="selectionMode"]:checked').value;
+            const balanceGender = document.getElementById('balanceGender').checked;
+            let selectedStaff = [];
+            
+            if (mode === 'total') {
+                const count = parseInt(document.getElementById('totalCount').value);
+                if (count < 1 || count > currentAvailableStaff.length) {
+                    alert(`選択人数は1名から${currentAvailableStaff.length}名の間で入力してください`);
+                    return;
+                }
+                
+                if (balanceGender) {
+                    selectedStaff = selectWithGenderBalance(currentAvailableStaff, count);
+                } else {
+                    const shuffled = [...currentAvailableStaff].sort(() => 0.5 - Math.random());
+                    selectedStaff = shuffled.slice(0, count);
+                }
+            } else {
+                const runnerCount = parseInt(document.getElementById('runnerCount').value);
+                const nonRunnerCount = parseInt(document.getElementById('nonRunnerCount').value);
+                
+                if (runnerCount + nonRunnerCount === 0) {
+                    alert('最低1名は選択してください');
+                    return;
+                }
+                
+                const runners = currentAvailableStaff.filter(s => s.is_rank === 'ランナー');
+                const nonRunners = currentAvailableStaff.filter(s => s.is_rank !== 'ランナー');
+                
+                if (runnerCount > runners.length || nonRunnerCount > nonRunners.length) {
+                    alert('選択人数が利用可能人数を超えています');
+                    return;
+                }
+                
+                const selectedRunners = runners.sort(() => 0.5 - Math.random()).slice(0, runnerCount);
+                const selectedNonRunners = nonRunners.sort(() => 0.5 - Math.random()).slice(0, nonRunnerCount);
+                
+                selectedStaff = [...selectedRunners, ...selectedNonRunners];
+            }
+            
+            // モーダルを閉じる
+            const modal = bootstrap.Modal.getInstance(document.getElementById('randomSelectionModal'));
+            modal.hide();
+            
+            // 結果を表示
+            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length);
+        }
+        
+        function selectWithGenderBalance(staff, count) {
+            const males = staff.filter(s => s.gender === 'M');
+            const females = staff.filter(s => s.gender === 'F');
+            
+            const maleRatio = males.length / staff.length;
+            const targetMales = Math.round(count * maleRatio);
+            const targetFemales = count - targetMales;
+            
+            const selectedMales = males.sort(() => 0.5 - Math.random()).slice(0, Math.min(targetMales, males.length));
+            const selectedFemales = females.sort(() => 0.5 - Math.random()).slice(0, Math.min(targetFemales, females.length));
+            
+            let selected = [...selectedMales, ...selectedFemales];
+            
+            // 不足分は残りから補完
+            if (selected.length < count) {
+                const remaining = staff.filter(s => !selected.includes(s));
+                const additional = remaining.sort(() => 0.5 - Math.random()).slice(0, count - selected.length);
+                selected = [...selected, ...additional];
+            }
+            
+            return selected.sort(() => 0.5 - Math.random());
+        }
+        
+        function showRandomSelectionResult(selectedStaff, totalCount) {
+            const staffArea = document.getElementById('availableStaffArea');
+            const eventSelect = document.querySelector('select[name="event_id"]');
+            const selectedEvent = eventSelect.options[eventSelect.selectedIndex];
+            const eventText = selectedEvent ? selectedEvent.text : '';
+            
+            let html = `
+                <div class="card border-success">
+                    <div class="card-header bg-success text-white">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">🎲 ランダム選択結果</h6>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="location.reload()">
+                                🔄 リセット
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-success">
+                            <strong>選択完了!</strong><br>
+                            ${totalCount}名中 <strong>${selectedStaff.length}名</strong> をランダム選択しました
+                        </div>
+                        
+                        <div class="mb-3">
+                            <h6>📋 選択されたスタッフ</h6>
+                            <div class="row g-2">
+            `;
+            
+            selectedStaff.forEach((staff, index) => {
+                const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                    `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                const rankBadge = staff.is_rank === 'ランナー' ? 
+                    '<span class="badge bg-primary">ランナー</span>' : 
+                    '<span class="badge bg-secondary">その他</span>';
+                
+                html += `
+                    <div class="col-md-6 mb-2">
+                        <div class="border border-success rounded p-2 bg-light">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <div class="fw-bold text-success">${index + 1}. ${staff.name}</div>
+                                    <div class="text-muted small">${timeDisplay}</div>
+                                    <div>${rankBadge}</div>
+                                </div>
+                                <span class="badge bg-success">${genderBadge}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-primary" onclick="randomSelectStaff()">
+                                🎲 再選択
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="loadAvailableStaff(document.querySelector('select[name=\\"event_id\\"]').value)">
+                                👥 全スタッフ表示に戻る
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            staffArea.innerHTML = html;
         }
     </script>
 </body>
