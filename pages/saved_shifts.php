@@ -48,6 +48,19 @@ function getCreationMethod($pdo, $eventId) {
     
     return ['type' => 'unknown', 'badge' => 'bg-secondary', 'text' => '📝 不明'];
 }
+
+// 割当されたスタッフ一覧を取得
+function getAssignedStaff($pdo, $eventId) {
+    $stmt = $pdo->prepare("
+        SELECT u.id, u.name, u.gender, u.is_rank, a.assigned_role
+        FROM assignments a
+        JOIN users u ON a.user_id = u.id
+        WHERE a.event_id = ?
+        ORDER BY a.assigned_role, u.furigana
+    ");
+    $stmt->execute([$eventId]);
+    return $stmt->fetchAll();
+}
 ?>
 
 <!DOCTYPE html>
@@ -99,6 +112,7 @@ function getCreationMethod($pdo, $eventId) {
             <?php foreach ($savedShifts as $shift): ?>
             <?php 
                 $creationMethod = getCreationMethod($pdo, $shift['id']);
+                $assignedStaff = getAssignedStaff($pdo, $shift['id']);
             ?>
             <div class="col-md-6 col-lg-4 mb-4">
                 <div class="card h-100">
@@ -129,25 +143,45 @@ function getCreationMethod($pdo, $eventId) {
                             <?php endif; ?>
                         </div>
                         
+                        <!-- スタッフ一覧表示 -->
+                        <div class="mb-3">
+                            <h6 class="mb-2">👥 割当スタッフ (<?= count($assignedStaff) ?>名)</h6>
+                            <div class="row g-2">
+                                <?php foreach ($assignedStaff as $index => $staff): ?>
+                                <div class="col-12">
+                                    <div class="border rounded p-2 bg-light">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <div>
+                                                <div class="fw-bold small"><?= $index + 1 ?>. <?= h($staff['name']) ?></div>
+                                                <div class="small">
+                                                    <?php if ($staff['is_rank'] === 'ランナー'): ?>
+                                                    <span class="badge bg-primary btn-sm">ランナー</span>
+                                                    <?php else: ?>
+                                                    <span class="badge bg-secondary btn-sm">その他</span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <span class="badge bg-success"><?= $staff['gender'] === 'M' ? '♂' : '♀' ?></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        
                         <div class="text-muted small">
                             <strong>保存日時:</strong><br>
                             <?= date('Y/m/d H:i', strtotime($shift['shift_created_at'])) ?>
                     </div>
                     <div class="card-footer">
-                        <div class="d-flex gap-2">
-                            <a href="shift_assignment.php?event_id=<?= $shift['id'] ?>&load_saved=1" 
-                               class="btn btn-primary flex-fill">
-                                👁️ 表示
-                            </a>
-                            <form method="POST" class="flex-fill" 
-                                  onsubmit="return confirm('シフトを削除しますか？この操作は取り消せません。')">
-                                <input type="hidden" name="action" value="delete_shift">
-                                <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
-                                <button type="submit" class="btn btn-outline-danger w-100">
-                                    🗑️ 削除
-                                </button>
-                            </form>
-                        </div>
+                        <form method="POST" class="w-100" 
+                              onsubmit="return confirm('シフトを削除しますか？この操作は取り消せません。')">
+                            <input type="hidden" name="action" value="delete_shift">
+                            <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
+                            <button type="submit" class="btn btn-outline-danger w-100">
+                                🗑️ 削除
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>
