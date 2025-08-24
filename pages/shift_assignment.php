@@ -592,6 +592,22 @@ function getAssignmentStats($assignments) {
                                 <li>公平なランダム選択</li>
                             </ul>
                         </div>
+                        
+                        <!-- ランダム選択結果表示エリア -->
+                        <div id="randomSelectionResult" style="display: none;" class="mt-4">
+                            <div class="alert alert-success">
+                                <h6 class="mb-3">🎲 ランダム選択されたスタッフ</h6>
+                                <div id="selectedStaffList" class="row g-2"></div>
+                                <div class="mt-3">
+                                    <button type="button" class="btn btn-primary btn-sm me-2" onclick="randomSelectStaff()">
+                                        🎲 再選択
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="hideRandomResult()">
+                                        ✖️ 結果を閉じる
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -1020,48 +1036,28 @@ function getAssignmentStats($assignments) {
         }
         
         function showRandomSelectionResult(selectedStaff, totalCount) {
-            const staffArea = document.getElementById('availableStaffArea');
-            const eventSelect = document.querySelector('select[name="event_id"]');
-            const selectedEvent = eventSelect.options[eventSelect.selectedIndex];
-            const eventText = selectedEvent ? selectedEvent.text : '';
+            // メインの結果表示エリアを表示
+            const resultArea = document.getElementById('randomSelectionResult');
+            const selectedStaffList = document.getElementById('selectedStaffList');
             
-            let html = `
-                <div class="card border-success">
-                    <div class="card-header bg-success text-white">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h6 class="mb-0">🎲 ランダム選択結果</h6>
-                            <button type="button" class="btn btn-sm btn-outline-light" onclick="location.reload()">
-                                🔄 リセット
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="alert alert-success">
-                            <strong>選択完了!</strong><br>
-                            ${totalCount}名中 <strong>${selectedStaff.length}名</strong> をランダム選択しました
-                        </div>
-                        
-                        <div class="mb-3">
-                            <h6>📋 選択されたスタッフ</h6>
-                            <div class="row g-2">
-            `;
-            
+            // 選択されたスタッフのHTML生成
+            let staffHtml = '';
             selectedStaff.forEach((staff, index) => {
                 const genderBadge = staff.gender === 'M' ? '♂' : '♀';
                 const timeDisplay = staff.available_start_time && staff.available_end_time ?
                     `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
                 const rankBadge = staff.is_rank === 'ランナー' ? 
-                    '<span class="badge bg-primary">ランナー</span>' : 
-                    '<span class="badge bg-secondary">その他</span>';
+                    '<span class="badge bg-primary btn-sm">ランナー</span>' : 
+                    '<span class="badge bg-secondary btn-sm">その他</span>';
                 
-                html += `
+                staffHtml += `
                     <div class="col-md-6 mb-2">
                         <div class="border border-success rounded p-2 bg-light">
                             <div class="d-flex justify-content-between align-items-start">
                                 <div>
                                     <div class="fw-bold text-success">${index + 1}. ${staff.name}</div>
                                     <div class="text-muted small">${timeDisplay}</div>
-                                    <div>${rankBadge}</div>
+                                    <div class="mt-1">${rankBadge}</div>
                                 </div>
                                 <span class="badge bg-success">${genderBadge}</span>
                             </div>
@@ -1070,23 +1066,22 @@ function getAssignmentStats($assignments) {
                 `;
             });
             
-            html += `
-                            </div>
-                        </div>
-                        
-                        <div class="d-grid gap-2">
-                            <button type="button" class="btn btn-primary" onclick="randomSelectStaff()">
-                                🎲 再選択
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary" onclick="loadAvailableStaff(document.querySelector('select[name=\\"event_id\\"]').value)">
-                                👥 全スタッフ表示に戻る
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
+            // 結果を表示
+            selectedStaffList.innerHTML = staffHtml;
+            resultArea.style.display = 'block';
             
-            staffArea.innerHTML = html;
+            // 結果エリアまでスクロール
+            resultArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // アラートメッセージを更新
+            const alertDiv = resultArea.querySelector('.alert-success h6');
+            alertDiv.innerHTML = `🎲 ランダム選択されたスタッフ (${totalCount}名中 ${selectedStaff.length}名)`;
+        }
+        
+        // 🆕 結果表示を非表示にする関数
+        function hideRandomResult() {
+            const resultArea = document.getElementById('randomSelectionResult');
+            resultArea.style.display = 'none';
         }
     </script>
 </body>
