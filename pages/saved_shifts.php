@@ -27,20 +27,6 @@ $stmt = $pdo->query("
 ");
 $savedShifts = $stmt->fetchAll();
 
-// 各シフトの詳細情報取得
-function getShiftSummary($pdo, $eventId) {
-    $stmt = $pdo->prepare("
-        SELECT a.assigned_role, COUNT(*) as count,
-               GROUP_CONCAT(u.name ORDER BY u.furigana SEPARATOR ', ') as staff_names
-        FROM assignments a
-        JOIN users u ON a.user_id = u.id
-        WHERE a.event_id = ?
-        GROUP BY a.assigned_role
-    ");
-    $stmt->execute([$eventId]);
-    return $stmt->fetchAll();
-}
-
 // シフト作成方法を取得
 function getCreationMethod($pdo, $eventId) {
     $stmt = $pdo->prepare("
@@ -112,7 +98,6 @@ function getCreationMethod($pdo, $eventId) {
         <div class="row">
             <?php foreach ($savedShifts as $shift): ?>
             <?php 
-                $shiftSummary = getShiftSummary($pdo, $shift['id']); 
                 $creationMethod = getCreationMethod($pdo, $shift['id']);
             ?>
             <div class="col-md-6 col-lg-4 mb-4">
@@ -132,66 +117,36 @@ function getCreationMethod($pdo, $eventId) {
                         </div>
                     </div>
                     <div class="card-body">
-                        <div class="mb-3">
-                            <strong>📅 日時</strong><br>
-                            <span class="text-primary"><?= formatDate($shift['event_date']) ?></span><br>
+                        <div class="mb-2">
+                            <span class="text-primary fw-bold"><?= formatDate($shift['event_date']) ?></span><br>
                             <span class="text-secondary"><?= formatTime($shift['start_time']) ?> - <?= formatTime($shift['end_time']) ?></span>
                         </div>
                         
-                        <?php if ($shift['venue']): ?>
                         <div class="mb-3">
-                            <strong>📍 会場</strong><br>
-                            <span class="badge bg-info"><?= h($shift['venue']) ?></span>
+                            <span class="badge bg-primary"><?= $shift['assigned_count'] ?>人割当</span>
+                            <?php if ($shift['venue']): ?>
+                            <span class="badge bg-info ms-1"><?= h($shift['venue']) ?></span>
+                            <?php endif; ?>
                         </div>
-                        <?php endif; ?>
-                        
-                        <div class="mb-3">
-                            <strong>👥 割当人数</strong>
-                            <span class="badge bg-primary ms-2"><?= $shift['assigned_count'] ?>人</span>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <strong>📋 役割別人数</strong><br>
-                            <?php foreach ($shiftSummary as $summary): ?>
-                            <div class="d-flex justify-content-between mt-1">
-                                <span class="fw-bold"><?= h($summary['assigned_role']) ?>:</span>
-                                <span class="badge bg-secondary"><?= $summary['count'] ?>人</span>
-                            </div>
-                            <?php endforeach; ?>
-                        </div>
-                        
-                        <?php if ($shift['description']): ?>
-                        <div class="mb-3">
-                            <strong>📝 説明</strong><br>
-                            <small class="text-muted"><?= h($shift['description']) ?></small>
-                        </div>
-                        <?php endif; ?>
                         
                         <div class="text-muted small">
                             <strong>保存日時:</strong><br>
                             <?= date('Y/m/d H:i', strtotime($shift['shift_created_at'])) ?>
-                        </div>
                     </div>
                     <div class="card-footer">
-                        <div class="d-grid gap-2">
+                        <div class="d-flex gap-2">
                             <a href="shift_assignment.php?event_id=<?= $shift['id'] ?>&load_saved=1" 
-                               class="btn btn-outline-primary">
-                                👁️ 詳細表示
+                               class="btn btn-primary flex-fill">
+                                👁️ 表示
                             </a>
-                            <div class="d-flex gap-2">
-                                <a href="shift_assignment.php?event_id=<?= $shift['id'] ?>" 
-                                   class="btn btn-outline-secondary flex-fill">
-                                    ✏️ 再作成
-                                </a>
-                                <form method="POST" class="flex-fill" 
-                                      onsubmit="return confirm('シフトを削除しますか？この操作は取り消せません。')">
-                                    <input type="hidden" name="action" value="delete_shift">
-                                    <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
-                                    <button type="submit" class="btn btn-outline-danger w-100">
-                                        🗑️ 削除
-                                    </button>
-                                </form>
-                            </div>
+                            <form method="POST" class="flex-fill" 
+                                  onsubmit="return confirm('シフトを削除しますか？この操作は取り消せません。')">
+                                <input type="hidden" name="action" value="delete_shift">
+                                <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
+                                <button type="submit" class="btn btn-outline-danger w-100">
+                                    🗑️ 削除
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>
