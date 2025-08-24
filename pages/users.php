@@ -688,7 +688,13 @@ try {
                 <div class="mb-3">
                     <div class="d-flex justify-content-between align-items-center">
                         <h6>📊 出勤履歴（${data.attendance.length}件）</h6>
-                        <small class="text-muted">※出勤可能として入力された日程</small>
+                        <small class="text-muted">※各日付の最新更新データのみ表示</small>
+                    </div>
+                    <div class="alert alert-info py-2 mb-3">
+                        <small>
+                            <i class="fas fa-info-circle"></i> 
+                            同じ日付で複数回更新された場合、最新の更新内容のみを表示しています
+                        </small>
                     </div>
                 </div>
                 <div class="table-responsive">

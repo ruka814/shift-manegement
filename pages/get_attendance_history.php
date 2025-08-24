@@ -18,17 +18,25 @@ try {
         throw new Exception('指定されたユーザーが見つかりません');
     }
     
-    // 出勤履歴を取得（イベント情報も含む）
+    // 🔄 改善：出勤履歴を取得（同じ日付の場合は最新の更新日時のもののみ）
+    // 各日付グループの最新レコードのIDを取得してから結合する方式
     $stmt = $pdo->prepare("
         SELECT a.*, e.event_type, e.description as event_description,
                e.venue, a.updated_at
         FROM availability a
         LEFT JOIN events e ON a.event_id = e.id
+        INNER JOIN (
+            SELECT work_date, MAX(updated_at) as max_updated_at
+            FROM availability
+            WHERE user_id = ? AND available = 1
+            GROUP BY work_date
+        ) latest ON a.work_date = latest.work_date 
+                AND a.updated_at = latest.max_updated_at
         WHERE a.user_id = ? AND a.available = 1
         ORDER BY a.work_date DESC
         LIMIT 100
     ");
-    $stmt->execute([$userId]);
+    $stmt->execute([$userId, $userId]);
     $attendance = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // 統計情報を計算
