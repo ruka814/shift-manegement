@@ -390,6 +390,9 @@ function getAssignmentStats($assignments) {
                             </ul>
                         </div>
                         
+                        <!-- 出勤可能スタッフ表示エリア -->
+                        <div id="availableStaffArea" class="mt-3"></div>
+                        
                         <form method="POST" class="mt-3" id="autoAssignForm">
                             <input type="hidden" name="action" value="auto_assign">
                             <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
@@ -757,6 +760,181 @@ function getAssignmentStats($assignments) {
                 });
             }, 5000); // 5秒後にリセット
         });
+    </script>
+    
+    <script>
+        // 🆕 出勤可能スタッフ表示機能
+        document.addEventListener('DOMContentLoaded', function() {
+            const eventSelect = document.querySelector('select[name="event_id"]');
+            
+            // ページ読み込み時に既に選択されている場合
+            if (eventSelect && eventSelect.value) {
+                loadAvailableStaff(eventSelect.value);
+            }
+            
+            // イベント選択変更時
+            if (eventSelect) {
+                eventSelect.addEventListener('change', function() {
+                    if (this.value) {
+                        loadAvailableStaff(this.value);
+                    } else {
+                        document.getElementById('availableStaffArea').innerHTML = '';
+                    }
+                });
+            }
+        });
+        
+        function loadAvailableStaff(eventId) {
+            const staffArea = document.getElementById('availableStaffArea');
+            
+            // ローディング表示
+            staffArea.innerHTML = `
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">👥 出勤可能スタッフ</h6>
+                    </div>
+                    <div class="card-body text-center">
+                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                        <span class="ms-2">読み込み中...</span>
+                    </div>
+                </div>
+            `;
+            
+            // API呼び出し
+            fetch(`get_available_staff.php?event_id=${eventId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        displayAvailableStaff(data);
+                    } else {
+                        showStaffError(data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading available staff:', error);
+                    showStaffError('データの取得に失敗しました');
+                });
+        }
+        
+        function displayAvailableStaff(data) {
+            const staffArea = document.getElementById('availableStaffArea');
+            const eventDate = new Date(data.event.event_date).toLocaleDateString('ja-JP', {
+                month: 'numeric',
+                day: 'numeric',
+                weekday: 'short'
+            });
+            
+            if (data.stats.total_available === 0) {
+                staffArea.innerHTML = `
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0">👥 出勤可能スタッフ (0名) - ${eventDate}</h6>
+                        </div>
+                        <div class="card-body text-center text-muted py-4">
+                            <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                            <p class="mb-1">この日に出勤可能なスタッフがいません</p>
+                            <small>出勤入力ページで出勤予定を入力してください</small>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = `
+                <div class="card">
+                    <div class="card-header">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">👥 出勤可能スタッフ (${data.stats.total_available}名) - ${eventDate}</h6>
+                            <small class="text-muted">♂${data.stats.male_count} ♀${data.stats.female_count}</small>
+                        </div>
+                    </div>
+                    <div class="card-body p-3">
+            `;
+            
+            // ランナー表示
+            if (data.runners.length > 0) {
+                html += `
+                    <div class="mb-3">
+                        <div class="fw-bold small text-primary mb-2">
+                            <i class="fas fa-star"></i> ランナー (${data.runners.length}名)
+                        </div>
+                        <div class="row g-2">
+                `;
+                
+                data.runners.forEach(staff => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    html += `
+                        <div class="col-md-6">
+                            <div class="border rounded p-2">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold small">${staff.name}</div>
+                                        <div class="text-muted" style="font-size: 0.75rem;">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-light text-dark">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div></div>';
+            }
+            
+            // その他のスタッフ表示
+            if (data.non_runners.length > 0) {
+                html += `
+                    <div class="mb-3">
+                        <div class="fw-bold small text-secondary mb-2">
+                            <i class="fas fa-users"></i> その他 (${data.non_runners.length}名)
+                        </div>
+                        <div class="row g-2">
+                `;
+                
+                data.non_runners.forEach(staff => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    html += `
+                        <div class="col-md-6">
+                            <div class="border rounded p-2">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold small">${staff.name}</div>
+                                        <div class="text-muted" style="font-size: 0.75rem;">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-light text-dark">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div></div>';
+            }
+            
+            html += '</div></div>';
+            staffArea.innerHTML = html;
+        }
+        
+        function showStaffError(message) {
+            const staffArea = document.getElementById('availableStaffArea');
+            staffArea.innerHTML = `
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">👥 出勤可能スタッフ</h6>
+                    </div>
+                    <div class="card-body text-center text-danger">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <span class="ms-2">${message}</span>
+                    </div>
+                </div>
+            `;
+        }
     </script>
 </body>
 </html>
