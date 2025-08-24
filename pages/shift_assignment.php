@@ -87,6 +87,39 @@ if ($_POST['action'] ?? '' === 'save_shift') {
     }
 }
 
+// ランダム選択シフト保存処理
+if ($_POST['action'] ?? '' === 'save_random_shift') {
+    try {
+        $eventId = $_POST['event_id'];
+        $selectedStaff = json_decode($_POST['selected_staff'], true);
+        
+        if (!$eventId || empty($selectedStaff)) {
+            throw new Exception('イベントIDまたは選択スタッフが不正です');
+        }
+        
+        // 既存の割当を削除
+        $stmt = $pdo->prepare("DELETE FROM assignments WHERE event_id = ?");
+        $stmt->execute([$eventId]);
+        
+        // ランダム選択されたスタッフを保存
+        $stmt = $pdo->prepare("INSERT INTO assignments (user_id, event_id, assigned_role, note) VALUES (?, ?, ?, ?)");
+        
+        foreach ($selectedStaff as $staff) {
+            $role = $staff['is_rank'] === 'ランナー' ? 'ランナー' : 'その他';
+            $stmt->execute([$staff['id'], $eventId, $role, 'ランダム選択による']);
+        }
+        
+        $message = showAlert('success', count($selectedStaff) . '名のランダムシフトを保存しました。');
+        $selectedEventId = $eventId;
+        
+        // 保存後に割当結果を再取得
+        $assignmentResult = getSavedAssignments($pdo, $eventId);
+        
+    } catch(Exception $e) {
+        $message = showAlert('danger', 'ランダムシフト保存エラー: ' . $e->getMessage());
+    }
+}
+
 // 保存済みシフト読み込み処理
 if ($_GET['load_saved'] ?? '' === '1' && $selectedEventId) {
     try {
@@ -602,6 +635,9 @@ function getAssignmentStats($assignments) {
                                     <button type="button" class="btn btn-primary btn-sm me-2" onclick="randomSelectStaff()">
                                         🎲 再選択
                                     </button>
+                                    <button type="button" class="btn btn-success btn-sm me-2" onclick="saveRandomShift()">
+                                        💾 シフト保存
+                                    </button>
                                     <button type="button" class="btn btn-outline-secondary btn-sm" onclick="hideRandomResult()">
                                         ✖️ 結果を閉じる
                                     </button>
@@ -1036,6 +1072,9 @@ function getAssignmentStats($assignments) {
         }
         
         function showRandomSelectionResult(selectedStaff, totalCount) {
+            // 🆕 選択されたスタッフデータをグローバル変数に保存
+            currentSelectedStaff = selectedStaff;
+            
             // メインの結果表示エリアを表示
             const resultArea = document.getElementById('randomSelectionResult');
             const selectedStaffList = document.getElementById('selectedStaffList');
@@ -1082,6 +1121,59 @@ function getAssignmentStats($assignments) {
         function hideRandomResult() {
             const resultArea = document.getElementById('randomSelectionResult');
             resultArea.style.display = 'none';
+        }
+        
+        // 🆕 現在選択されているスタッフのデータを保存
+        let currentSelectedStaff = [];
+        
+        // 🆕 ランダムシフト保存機能
+        function saveRandomShift() {
+            const eventSelect = document.querySelector('select[name="event_id"]');
+            const eventId = eventSelect.value;
+            
+            if (!eventId) {
+                alert('イベントが選択されていません');
+                return;
+            }
+            
+            if (currentSelectedStaff.length === 0) {
+                alert('保存するスタッフが選択されていません');
+                return;
+            }
+            
+            if (!confirm(`選択された${currentSelectedStaff.length}名のスタッフでシフトを保存しますか？`)) {
+                return;
+            }
+            
+            // 保存ボタンを無効化
+            const saveBtn = event.target;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '💾 保存中...';
+            
+            // フォームデータを作成
+            const formData = new FormData();
+            formData.append('action', 'save_random_shift');
+            formData.append('event_id', eventId);
+            formData.append('selected_staff', JSON.stringify(currentSelectedStaff));
+            
+            // サーバーに送信
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(data => {
+                // ページをリロードして保存結果を表示
+                window.location.reload();
+            })
+            .catch(error => {
+                console.error('保存エラー:', error);
+                alert('シフトの保存に失敗しました');
+                
+                // ボタンを元に戻す
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '💾 シフト保存';
+            });
         }
     </script>
 </body>

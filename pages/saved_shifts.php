@@ -19,7 +19,8 @@ if ($_POST['action'] ?? '' === 'delete_shift') {
 // 保存済みシフト一覧取得
 $stmt = $pdo->query("
     SELECT e.*, COUNT(a.id) as assigned_count,
-           MIN(a.created_at) as shift_created_at
+           MIN(a.created_at) as shift_created_at,
+           a.note as creation_method
     FROM events e
     JOIN assignments a ON e.id = a.event_id
     GROUP BY e.id
@@ -39,6 +40,28 @@ function getShiftSummary($pdo, $eventId) {
     ");
     $stmt->execute([$eventId]);
     return $stmt->fetchAll();
+}
+
+// シフト作成方法を取得
+function getCreationMethod($pdo, $eventId) {
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT note FROM assignments WHERE event_id = ? LIMIT 1
+    ");
+    $stmt->execute([$eventId]);
+    $result = $stmt->fetch();
+    
+    if ($result && $result['note']) {
+        $note = $result['note'];
+        if (strpos($note, 'ランダム選択') !== false) {
+            return ['type' => 'random', 'badge' => 'bg-primary', 'text' => '🎲 ランダム選択'];
+        } elseif (strpos($note, '自動割当') !== false) {
+            return ['type' => 'auto', 'badge' => 'bg-success', 'text' => '🎯 自動割当'];
+        } else {
+            return ['type' => 'manual', 'badge' => 'bg-secondary', 'text' => '✏️ 手動作成'];
+        }
+    }
+    
+    return ['type' => 'unknown', 'badge' => 'bg-secondary', 'text' => '📝 不明'];
 }
 ?>
 
@@ -89,7 +112,10 @@ function getShiftSummary($pdo, $eventId) {
         
         <div class="row">
             <?php foreach ($savedShifts as $shift): ?>
-            <?php $shiftSummary = getShiftSummary($pdo, $shift['id']); ?>
+            <?php 
+                $shiftSummary = getShiftSummary($pdo, $shift['id']); 
+                $creationMethod = getCreationMethod($pdo, $shift['id']);
+            ?>
             <div class="col-md-6 col-lg-4 mb-4">
                 <div class="card h-100">
                     <div class="card-header">
@@ -100,7 +126,10 @@ function getShiftSummary($pdo, $eventId) {
                                     ID: <?= $shift['id'] ?>
                                 </small>
                             </div>
-                            <span class="badge bg-success">保存済み</span>
+                            <div class="d-flex flex-column align-items-end">
+                                <span class="badge bg-success mb-1">保存済み</span>
+                                <span class="badge <?= $creationMethod['badge'] ?>"><?= $creationMethod['text'] ?></span>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body">
