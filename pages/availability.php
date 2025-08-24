@@ -41,10 +41,22 @@ if ($_POST['action'] ?? '' === 'update_availability') {
                 continue; // 存在しないユーザーIDはスキップ
             }
             
-            // まず該当日のユーザーの既存データを削除（一般的な出勤情報のみ）
-            // event_id IS NULL または event_id = 0 の両方を削除
-            $stmt = $pdo->prepare("DELETE FROM availability WHERE user_id = ? AND work_date = ? AND (event_id IS NULL OR event_id = 0)");
-            $stmt->execute([$userId, $work_date]);            // 時間が入力されている場合のみ保存
+            // 🔄 改善：該当日のユーザーの既存データを完全に削除（一般的な出勤情報のみ）
+            // 複数のパターンで削除を試行し、重複を確実に防ぐ
+            $deleteStmt = $pdo->prepare("
+                DELETE FROM availability 
+                WHERE user_id = ? AND work_date = ? 
+                AND (event_id IS NULL OR event_id = 0 OR event_id = '')
+            ");
+            $deletedRows = $deleteStmt->execute([$userId, $work_date]);
+            $deletedCount = $deleteStmt->rowCount();
+            
+            // デバッグログ：削除件数を記録
+            if ($deletedCount > 0) {
+                error_log("availability.php: Deleted {$deletedCount} existing records for user {$userId} on {$work_date}");
+            }
+            
+            // 時間が入力されている場合のみ保存
             $hasStartTime = !empty($data['start_hour']) && !empty($data['start_minute']);
             $hasEndTime = !empty($data['end_hour']) && !empty($data['end_minute']);
             
@@ -80,17 +92,38 @@ if ($_POST['action'] ?? '' === 'update_availability') {
                 
                 // まず、テーブル構造を確認してevent_idがNULL許可かチェック
                 try {
+                    // 🔄 改善：挿入前に重複チェック
+                    $checkStmt = $pdo->prepare("
+                        SELECT COUNT(*) as count FROM availability 
+                        WHERE user_id = ? AND work_date = ? 
+                        AND (event_id IS NULL OR event_id = 0 OR event_id = '')
+                    ");
+                    $checkStmt->execute([$userId, $work_date]);
+                    $existingCount = $checkStmt->fetch()['count'];
+                    
+                    if ($existingCount > 0) {
+                        error_log("availability.php: Warning - {$existingCount} existing records still found for user {$userId} on {$work_date} before insert");
+                        // 再度削除を試行
+                        $deleteStmt->execute([$userId, $work_date]);
+                    }
+                    
                     $stmt = $pdo->prepare("
                         INSERT INTO availability (user_id, work_date, available, available_start_time, available_end_time, event_id) 
                         VALUES (?, ?, ?, ?, ?, NULL)
                     ");
-                    $stmt->execute([
+                    $insertResult = $stmt->execute([
                         $userId,
                         $work_date,
                         1,
                         $start_time,
                         $end_time
                     ]);
+                    
+                    // 成功ログ
+                    if ($insertResult) {
+                        error_log("availability.php: Successfully inserted new record for user {$userId} on {$work_date}");
+                    }
+                    
                 } catch (PDOException $e) {
                     // NULLが許可されていない場合は、0を使用（一般的な出勤情報の識別子として）
                     if (strpos($e->getMessage(), 'cannot be null') !== false) {
@@ -108,6 +141,43 @@ if ($_POST['action'] ?? '' === 'update_availability') {
                     } else {
                         throw $e; // その他のエラーは再スロー
                     }
+                }
+            }
+        }
+        
+        // 🔄 改善：処理完了後に重複チェック
+        $finalCheckStmt = $pdo->prepare("
+            SELECT user_id, work_date, COUNT(*) as count
+            FROM availability 
+            WHERE work_date = ? AND (event_id IS NULL OR event_id = 0 OR event_id = '')
+            GROUP BY user_id, work_date 
+            HAVING COUNT(*) > 1
+        ");
+        $finalCheckStmt->execute([$work_date]);
+        $remainingDuplicates = $finalCheckStmt->fetchAll();
+        
+        if (!empty($remainingDuplicates)) {
+            error_log("availability.php: Warning - " . count($remainingDuplicates) . " duplicates still exist after processing");
+            
+            // 自動クリーンアップを実行
+            foreach ($remainingDuplicates as $dup) {
+                $cleanupStmt = $pdo->prepare("
+                    DELETE FROM availability 
+                    WHERE user_id = ? AND work_date = ? AND (event_id IS NULL OR event_id = 0 OR event_id = '')
+                    AND id NOT IN (
+                        SELECT * FROM (
+                            SELECT id FROM availability 
+                            WHERE user_id = ? AND work_date = ? AND (event_id IS NULL OR event_id = 0 OR event_id = '')
+                            ORDER BY updated_at DESC 
+                            LIMIT 1
+                        ) AS temp
+                    )
+                ");
+                $cleanupStmt->execute([$dup['user_id'], $dup['work_date'], $dup['user_id'], $dup['work_date']]);
+                $cleanedCount = $cleanupStmt->rowCount();
+                
+                if ($cleanedCount > 0) {
+                    error_log("availability.php: Auto-cleaned {$cleanedCount} duplicate records for user {$dup['user_id']} on {$dup['work_date']}");
                 }
             }
         }
