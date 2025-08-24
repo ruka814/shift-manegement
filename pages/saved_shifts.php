@@ -70,6 +70,7 @@ function getAssignedStaff($pdo, $eventId) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>保存済みシフト一覧 - シフト管理システム</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="../assets/css/style.css">
 </head>
 <body>
@@ -114,72 +115,67 @@ function getAssignedStaff($pdo, $eventId) {
                 $creationMethod = getCreationMethod($pdo, $shift['id']);
                 $assignedStaff = getAssignedStaff($pdo, $shift['id']);
             ?>
-            <div class="col-md-6 col-lg-4 mb-4">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h6 class="mb-1"><?= h($shift['event_type']) ?></h6>
-                                <small class="text-muted">
-                                    ID: <?= $shift['id'] ?>
-                                </small>
+            <div class="col-12 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-light">
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h5 class="mb-1 text-primary"><?= h($shift['event_type']) ?></h5>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span class="fw-bold text-dark"><?= formatDate($shift['event_date']) ?></span>
+                                    <span class="text-muted"><?= formatTime($shift['start_time']) ?> - <?= formatTime($shift['end_time']) ?></span>
+                                    <?php if ($shift['venue']): ?>
+                                    <span class="badge bg-info"><?= h($shift['venue']) ?></span>
+                                    <?php endif; ?>
+                                </div>
                             </div>
-                            <div class="d-flex flex-column align-items-end">
-                                <span class="badge bg-success mb-1">保存済み</span>
-                                <span class="badge <?= $creationMethod['badge'] ?>"><?= $creationMethod['text'] ?></span>
+                            <div class="col-md-4 text-end">
+                                <div class="d-flex flex-column align-items-end gap-1">
+                                    <span class="badge <?= $creationMethod['badge'] ?> fs-6"><?= $creationMethod['text'] ?></span>
+                                    <span class="badge bg-primary"><?= $shift['assigned_count'] ?>名割当</span>
+                                </div>
                             </div>
                         </div>
                     </div>
                     <div class="card-body">
-                        <div class="mb-2">
-                            <span class="text-primary fw-bold"><?= formatDate($shift['event_date']) ?></span><br>
-                            <span class="text-secondary"><?= formatTime($shift['start_time']) ?> - <?= formatTime($shift['end_time']) ?></span>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <span class="badge bg-primary"><?= $shift['assigned_count'] ?>人割当</span>
-                            <?php if ($shift['venue']): ?>
-                            <span class="badge bg-info ms-1"><?= h($shift['venue']) ?></span>
-                            <?php endif; ?>
-                        </div>
-                        
-                        <!-- スタッフ一覧表示 -->
-                        <div class="mb-3">
-                            <h6 class="mb-2">👥 割当スタッフ (<?= count($assignedStaff) ?>名)</h6>
-                            <div class="row g-2">
-                                <?php foreach ($assignedStaff as $index => $staff): ?>
-                                <div class="col-12">
-                                    <div class="border rounded p-2 bg-light">
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <div>
-                                                <div class="fw-bold small"><?= $index + 1 ?>. <?= h($staff['name']) ?></div>
-                                                <div class="small">
-                                                    <?php if ($staff['is_rank'] === 'ランナー'): ?>
-                                                    <span class="badge bg-primary btn-sm">ランナー</span>
-                                                    <?php else: ?>
-                                                    <span class="badge bg-secondary btn-sm">その他</span>
-                                                    <?php endif; ?>
-                                                </div>
-                                            </div>
+                        <!-- スタッフ一覧を2列で表示 -->
+                        <div class="row g-3">
+                            <?php foreach ($assignedStaff as $index => $staff): ?>
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center p-2 bg-light rounded">
+                                    <div class="me-3">
+                                        <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-size: 14px; font-weight: bold;">
+                                            <?= $index + 1 ?>
+                                        </div>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="fw-bold text-dark"><?= h($staff['name']) ?></div>
+                                        <div class="d-flex gap-1 mt-1">
+                                            <?php if ($staff['is_rank'] === 'ランナー'): ?>
+                                            <span class="badge bg-primary">ランナー</span>
+                                            <?php else: ?>
+                                            <span class="badge bg-secondary">その他</span>
+                                            <?php endif; ?>
                                             <span class="badge bg-success"><?= $staff['gender'] === 'M' ? '♂' : '♀' ?></span>
                                         </div>
                                     </div>
                                 </div>
-                                <?php endforeach; ?>
                             </div>
+                            <?php endforeach; ?>
                         </div>
+                    </div>
                         
                         <div class="text-muted small">
                             <strong>保存日時:</strong><br>
                             <?= date('Y/m/d H:i', strtotime($shift['shift_created_at'])) ?>
                     </div>
-                    <div class="card-footer">
-                        <form method="POST" class="w-100" 
-                              onsubmit="return confirm('シフトを削除しますか？この操作は取り消せません。')">
+                    <div class="card-footer bg-light text-end">
+                        <form method="POST" class="d-inline" 
+                              onsubmit="return confirm('このシフトを削除しますか？\n\nこの操作は取り消せません。')">
                             <input type="hidden" name="action" value="delete_shift">
                             <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
-                            <button type="submit" class="btn btn-outline-danger w-100">
-                                🗑️ 削除
+                            <button type="submit" class="btn btn-outline-danger">
+                                <i class="fas fa-trash-alt me-1"></i>削除
                             </button>
                         </form>
                     </div>
