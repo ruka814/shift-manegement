@@ -58,57 +58,6 @@ if ($_POST['action'] ?? '' === 'init_sample_data') {
     }
 }
 
-// 自動割当処理
-if ($_POST['action'] ?? '' === 'auto_assign') {
-    try {
-        $eventId = $_POST['event_id'];
-        if (!$eventId) {
-            throw new Exception('イベントが選択されていません');
-        }
-        
-        // デバッグ情報を追加
-        error_log("Auto assign started for event ID: " . $eventId);
-        
-        // イベント存在確認
-        $stmt = $pdo->prepare("SELECT * FROM events WHERE id = ?");
-        $stmt->execute([$eventId]);
-        $testEvent = $stmt->fetch();
-        
-        if (!$testEvent) {
-            throw new Exception("イベントID {$eventId} が見つかりません");
-        }
-        
-        // 出勤可能なスタッフ数をチェック
-        $stmt = $pdo->prepare("
-            SELECT COUNT(*) as count FROM availability 
-            WHERE work_date = ? AND available = 1
-        ");
-        $stmt->execute([$testEvent['event_date']]);
-        $availableCount = $stmt->fetch()['count'];
-        
-        if ($availableCount == 0) {
-            throw new Exception("日付 {$testEvent['event_date']} に出勤可能なスタッフがいません（availability テーブル）");
-        }
-        
-        $assignmentResult = performAutoAssignment($pdo, $eventId);
-        $selectedEventId = $eventId; // 結果表示のためにイベントIDを保持
-        
-        if (empty($assignmentResult['assignments'])) {
-            $message = showAlert('warning', "シフトを作成しましたが、条件に合うスタッフが見つからず、割当できませんでした。出勤可能スタッフ数: {$availableCount}");
-        } else {
-            $totalAssigned = 0;
-            foreach ($assignmentResult['assignments'] as $role => $assignments) {
-                $totalAssigned += count($assignments);
-            }
-            $message = showAlert('success', "シフトを自動作成しました。{$totalAssigned}名を割当しました。");
-        }
-        
-    } catch(Exception $e) {
-        error_log("Auto assign error: " . $e->getMessage());
-        $message = showAlert('danger', 'エラーが発生しました: ' . $e->getMessage());
-    }
-}
-
 // シフト保存処理
 if ($_POST['action'] ?? '' === 'save_shift') {
     try {
@@ -395,16 +344,8 @@ function getAssignmentStats($assignments) {
                         
                         <!-- シフト作成ボタンエリア -->
                         <div class="mt-3">
-                            <form method="POST" id="autoAssignForm">
-                                <input type="hidden" name="action" value="auto_assign">
-                                <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
-                                <button type="submit" class="btn btn-success w-100 mb-2" id="autoAssignBtn">
-                                    🎯 自動シフト作成
-                                </button>
-                            </form>
-                            
-                            <!-- 🆕 ランダム選択ボタン -->
-                            <button type="button" class="btn btn-outline-primary w-100" id="randomSelectBtn" onclick="randomSelectStaff()" disabled>
+                            <!-- ランダム選択ボタン -->
+                            <button type="button" class="btn btn-primary w-100" id="randomSelectBtn" onclick="randomSelectStaff()" disabled>
                                 🎲 ランダム選択
                             </button>
                             <small class="text-muted d-block mt-1">※出勤可能スタッフからランダムで選択</small>
@@ -450,16 +391,7 @@ function getAssignmentStats($assignments) {
                                     
                                     <!-- サブ操作 -->
                                     <div class="row">
-                                        <div class="col-6">
-                                            <form method="POST" id="recreateShiftForm">
-                                                <input type="hidden" name="action" value="auto_assign">
-                                                <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
-                                                <button type="submit" class="btn btn-outline-warning w-100 btn-sm">
-                                                    🔄 再作成
-                                                </button>
-                                            </form>
-                                        </div>
-                                        <div class="col-6">
+                                        <div class="col-12">
                                             <button class="btn btn-outline-info w-100 btn-sm" onclick="window.print()">
                                                 🖨️ 印刷
                                             </button>
@@ -475,25 +407,13 @@ function getAssignmentStats($assignments) {
                                     
                                     <!-- サブ操作（保存済みの場合） -->
                                     <div class="row">
-                                        <div class="col-6">
-                                            <form method="POST" id="recreateShiftFormSaved">
-                                                <input type="hidden" name="action" value="auto_assign">
-                                                <input type="hidden" name="event_id" value="<?= $selectedEventId ?>">
-                                                <button type="submit" class="btn btn-outline-success w-100 btn-sm" 
-                                                        onclick="return confirm('🔄 新しいシフトを作成しますか？\n\n※現在の保存済みシフトは保持されます。')">
-                                                    🔄 新規作成
-                                                </button>
-                                            </form>
-                                        </div>
-                                        <div class="col-6">
+                                        <div class="col-12">
                                             <button class="btn btn-outline-info w-100 btn-sm" onclick="window.print()">
                                                 🖨️ 印刷
                                             </button>
                                         </div>
                                     </div>
-                                    <?php endif; ?>>
-                                        🖨️ 印刷
-                                    </button>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -660,32 +580,17 @@ function getAssignmentStats($assignments) {
                 <!-- イベントが選択されているがシフトが作成されていない場合 -->
                 <div class="card">
                     <div class="card-body text-center">
-                        <h5>🎯 シフト自動作成</h5>
-                        <p class="text-muted">左側の「自動シフト作成」ボタンをクリックして、最適なシフトを自動生成します。</p>
+                        <h5>🎯 シフト作成</h5>
+                        <p class="text-muted">左側の「ランダム選択」ボタンをクリックして、シフトを作成します。</p>
                         
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="alert alert-info">
-                                    <h6>🔄 作成フロー</h6>
-                                    <ol class="text-start mb-0">
-                                        <li>「自動シフト作成」をクリック</li>
-                                        <li>作成されたシフトを確認</li>
-                                        <li>「シフトを保存」で確定</li>
-                                        <li>必要に応じて印刷</li>
-                                    </ol>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="alert alert-success">
-                                    <h6>✅ 自動割当の条件</h6>
-                                    <ul class="text-start mb-0">
-                                        <li>出勤可能時間がイベント時間と重複</li>
-                                        <li>スキルレベル（できる > まあまあできる）</li>
-                                        <li>ランク（ランナー優先）</li>
-                                        <li>必要最小人数を優先配置</li>
-                                    </ul>
-                                </div>
-                            </div>
+                        <div class="alert alert-info">
+                            <h6>✅ ランダム選択の特徴</h6>
+                            <ul class="text-start mb-0">
+                                <li>出勤可能時間がイベント時間と重複</li>
+                                <li>ランナー・その他から選択可能</li>
+                                <li>男女バランス考慮オプション</li>
+                                <li>公平なランダム選択</li>
+                            </ul>
                         </div>
                     </div>
                 </div>
@@ -705,20 +610,6 @@ function getAssignmentStats($assignments) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // 自動シフト作成ボタンの処理
-            const autoAssignForm = document.getElementById('autoAssignForm');
-            const autoAssignBtn = document.getElementById('autoAssignBtn');
-            
-            if (autoAssignForm && autoAssignBtn) {
-                autoAssignForm.addEventListener('submit', function(e) {
-                    autoAssignBtn.disabled = true;
-                    autoAssignBtn.innerHTML = '🔄 作成中...';
-                    autoAssignBtn.classList.add('disabled');
-                    
-                    console.log('自動シフト作成を実行中...');
-                });
-            }
-            
             // 保存ボタンの処理
             const saveShiftForm = document.getElementById('saveShiftForm');
             const saveShiftBtn = document.getElementById('saveShiftBtn');
@@ -733,21 +624,6 @@ function getAssignmentStats($assignments) {
                 });
             }
             
-            // 再作成ボタンの処理
-            const recreateForms = document.querySelectorAll('#recreateShiftForm, #recreateShiftFormSaved');
-            recreateForms.forEach(function(form) {
-                form.addEventListener('submit', function(e) {
-                    const btn = form.querySelector('button[type="submit"]');
-                    if (btn) {
-                        btn.disabled = true;
-                        btn.innerHTML = '🔄 再作成中...';
-                        btn.classList.add('disabled');
-                        
-                        console.log('シフト再作成を実行中...');
-                    }
-                });
-            });
-            
             // フォーム送信後のリセット（エラー時など）
             setTimeout(function() {
                 const buttons = document.querySelectorAll('.disabled');
@@ -755,16 +631,8 @@ function getAssignmentStats($assignments) {
                     btn.disabled = false;
                     btn.classList.remove('disabled');
                     
-                    if (btn.id === 'autoAssignBtn') {
-                        btn.innerHTML = '🎯 自動シフト作成';
-                    } else if (btn.id === 'saveShiftBtn') {
+                    if (btn.id === 'saveShiftBtn') {
                         btn.innerHTML = '<i class="fas fa-save"></i> シフトを保存';
-                    } else if (btn.innerHTML.includes('再作成中')) {
-                        if (btn.innerHTML.includes('新しいシフト')) {
-                            btn.innerHTML = '🔄 新しいシフト作成';
-                        } else {
-                            btn.innerHTML = '🔄 シフト再作成';
-                        }
                     }
                 });
             }, 5000); // 5秒後にリセット
