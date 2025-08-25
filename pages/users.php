@@ -688,12 +688,13 @@ try {
                 <div class="mb-3">
                     <div class="d-flex justify-content-between align-items-center">
                         <h6>📊 出勤履歴（${data.attendance.length}件）</h6>
-                        <small class="text-muted">※各日付の最新更新データのみ表示</small>
+                        <small class="text-muted">※出勤可能日と実際の割当日を含む</small>
                     </div>
                     <div class="alert alert-info py-2 mb-3">
                         <small>
                             <i class="fas fa-info-circle"></i> 
-                            同じ日付で複数回更新された場合、最新の更新内容のみを表示しています
+                            <span class="badge bg-success me-1">確定</span>実際にシフトに割り当てられた日
+                            <span class="badge bg-info me-1 ms-2">可能</span>出勤可能として登録した日
                         </small>
                     </div>
                 </div>
@@ -703,10 +704,11 @@ try {
                             <tr>
                                 <th>日付</th>
                                 <th>曜日</th>
+                                <th>ステータス</th>
                                 <th>出勤時間</th>
                                 <th>イベント</th>
+                                <th>役割・備考</th>
                                 <th>更新日時</th>
-                                <th>備考</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -722,6 +724,16 @@ try {
                     '<span class="text-muted">時間未設定</span>';
                 
                 const weekday = new Date(record.work_date).toLocaleDateString('ja-JP', { weekday: 'short' });
+                
+                // ステータス表示
+                const statusBadge = record.record_type === 'assignment' ?
+                    '<span class="badge bg-success">出勤確定</span>' :
+                    '<span class="badge bg-info">出勤可能</span>';
+                
+                // 役割・備考の表示
+                const roleNote = record.record_type === 'assignment' && record.assigned_role ?
+                    `<span class="badge bg-primary me-1">${record.assigned_role}</span>${record.note ? `<br><small class="text-muted">${record.note}</small>` : ''}` :
+                    (record.note ? `<small class="text-muted">${record.note}</small>` : '-');
                 
                 // 更新日時の表示
                 const updatedAt = record.updated_at ? 
@@ -741,13 +753,12 @@ try {
                         <td>
                             <span class="badge ${weekday === '土' || weekday === '日' ? 'bg-warning text-dark' : 'bg-light text-dark'}">${weekday}</span>
                         </td>
+                        <td>${statusBadge}</td>
                         <td>${timeInfo}</td>
                         <td>${eventInfo}</td>
+                        <td>${roleNote}</td>
                         <td>
                             <small class="text-muted">${updatedAt}</small>
-                        </td>
-                        <td>
-                            ${record.note ? `<small class="text-muted">${record.note}</small>` : '-'}
                         </td>
                     </tr>
                 `;
@@ -767,19 +778,27 @@ try {
                         <div class="card-body">
                             <h6 class="card-title">📈 出勤統計</h6>
                             <div class="row text-center">
-                                <div class="col-md-3">
+                                <div class="col-md-2">
                                     <div class="stat-number">${stats.total_days || 0}</div>
-                                    <div class="stat-label">総出勤予定日数</div>
+                                    <div class="stat-label">総出勤日数</div>
                                 </div>
-                                <div class="col-md-3">
+                                <div class="col-md-2">
+                                    <div class="stat-number">${stats.assignment_days || 0}</div>
+                                    <div class="stat-label">確定シフト</div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="stat-number">${stats.availability_days || 0}</div>
+                                    <div class="stat-label">出勤可能日</div>
+                                </div>
+                                <div class="col-md-2">
                                     <div class="stat-number">${stats.weekend_days || 0}</div>
                                     <div class="stat-label">土日出勤</div>
                                 </div>
-                                <div class="col-md-3">
+                                <div class="col-md-2">
                                     <div class="stat-number">${stats.event_days || 0}</div>
                                     <div class="stat-label">イベント出勤</div>
                                 </div>
-                                <div class="col-md-3">
+                                <div class="col-md-2">
                                     <div class="stat-number">${stats.this_month || 0}</div>
                                     <div class="stat-label">今月の予定</div>
                                 </div>

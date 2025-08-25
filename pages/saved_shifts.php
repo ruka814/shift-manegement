@@ -4,6 +4,42 @@ require_once '../includes/functions.php';
 
 $message = '';
 
+// AJAX リクエスト処理
+if ($_GET['action'] ?? '' === 'get_personal_shift') {
+    $userId = $_GET['user_id'] ?? '';
+    
+    // デバッグ用ログ
+    error_log("Personal shift request - User ID: " . $userId);
+    
+    if ($userId) {
+        try {
+            $personalShift = getPersonalShiftDetail($pdo, $userId);
+            error_log("Personal shift data retrieved: " . ($personalShift ? "Success" : "No data"));
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => true,
+                'data' => $personalShift
+            ]);
+            exit;
+        } catch (Exception $e) {
+            error_log("Error in personal shift: " . $e->getMessage());
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'error' => 'データ取得エラー: ' . $e->getMessage()
+            ]);
+            exit;
+        }
+    } else {
+        header('Content-Type: application/json');
+        echo json_encode([
+            'success' => false,
+            'error' => 'パラメータが不正です'
+        ]);
+        exit;
+    }
+}
+
 // シフト削除処理
 if ($_POST['action'] ?? '' === 'delete_shift') {
     try {
@@ -74,7 +110,7 @@ function getUnassignedAvailableStaff($pdo, $eventId) {
     }
     
     $stmt = $pdo->prepare("
-        SELECT DISTINCT u.id, u.name, u.gender, u.is_rank,
+        SELECT DISTINCT u.id, u.name, u.gender, u.is_rank, u.furigana,
                av.available_start_time, av.available_end_time
         FROM users u
         JOIN availability av ON u.id = av.user_id
@@ -87,6 +123,83 @@ function getUnassignedAvailableStaff($pdo, $eventId) {
     ");
     $stmt->execute([$event['event_date'], $eventId]);
     return $stmt->fetchAll();
+}
+
+// 個人の全シフト詳細情報を取得
+function getPersonalShiftDetail($pdo, $userId) {
+    error_log("getPersonalShiftDetail called with userId: " . $userId);
+    
+    try {
+        // ユーザー基本情報
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $userInfo = $stmt->fetch();
+        
+        if (!$userInfo) {
+            error_log("User not found for ID: " . $userId);
+            return null;
+        }
+        
+        error_log("User found: " . $userInfo['name']);
+        
+        // その人が関わっている全てのシフトを取得
+        $stmt = $pdo->prepare("
+            SELECT 
+                e.id as event_id,
+                e.event_type,
+                e.event_date,
+                e.start_time,
+                e.end_time,
+                e.venue,
+                a.assigned_role,
+                a.note as assignment_note,
+                a.created_at as assignment_created_at,
+                'システム作成' as shift_name
+            FROM assignments a
+            JOIN events e ON a.event_id = e.id
+            WHERE a.user_id = ?
+            ORDER BY e.event_date DESC, a.created_at DESC
+        ");
+        $stmt->execute([$userId]);
+        $shifts = $stmt->fetchAll();
+        
+        error_log("Shifts found: " . count($shifts));
+        
+        // 各シフトの出勤可能情報も取得
+        foreach ($shifts as &$shift) {
+            $stmt = $pdo->prepare("
+                SELECT available, available_start_time, available_end_time, note
+                FROM availability
+                WHERE user_id = ? AND work_date = ?
+            ");
+            $stmt->execute([$userId, $shift['event_date']]);
+            $availability = $stmt->fetch();
+            $shift['availability'] = $availability;
+        }
+        
+        // スキル情報を取得
+        $stmt = $pdo->prepare("
+            SELECT tt.name as task_name, s.skill_level
+            FROM skills s
+            JOIN task_types tt ON s.task_type_id = tt.id
+            WHERE s.user_id = ?
+            ORDER BY tt.name
+        ");
+        $stmt->execute([$userId]);
+        $skills = $stmt->fetchAll();
+        
+        error_log("Skills found: " . count($skills));
+        
+        return [
+            'user' => $userInfo,
+            'shifts' => $shifts,
+            'skills' => $skills
+        ];
+        
+    } catch (Exception $e) {
+        error_log("Exception in getPersonalShiftDetail: " . $e->getMessage());
+        throw $e;
+    }
 }
 ?>
 
@@ -182,7 +295,12 @@ function getUnassignedAvailableStaff($pdo, $eventId) {
                                             </div>
                                         </div>
                                         <div class="flex-grow-1">
-                                            <div class="fw-bold text-dark"><?= h($staff['name']) ?></div>
+                                            <div class="fw-bold text-dark">
+                                                <a href="#" class="text-decoration-none text-dark" 
+                                                   onclick="showPersonalShift(<?= $staff['id'] ?>)">
+                                                    <?= h($staff['name']) ?>
+                                                </a>
+                                            </div>
                                             <div class="d-flex gap-1 mt-1">
                                                 <?php if ($staff['is_rank'] === 'ランナー'): ?>
                                                 <span class="badge bg-primary">ランナー</span>
@@ -212,7 +330,12 @@ function getUnassignedAvailableStaff($pdo, $eventId) {
                                             </div>
                                         </div>
                                         <div class="flex-grow-1">
-                                            <div class="fw-bold text-dark"><?= h($staff['name']) ?></div>
+                                            <div class="fw-bold text-dark">
+                                                <a href="#" class="text-decoration-none text-dark" 
+                                                   onclick="showPersonalShift(<?= $staff['id'] ?>)">
+                                                    <?= h($staff['name']) ?>
+                                                </a>
+                                            </div>
                                             <div class="d-flex gap-1 mt-1">
                                                 <?php if ($staff['is_rank'] === 'ランナー'): ?>
                                                 <span class="badge bg-primary">ランナー</span>
@@ -290,6 +413,238 @@ function getUnassignedAvailableStaff($pdo, $eventId) {
         <?php endif; ?>
     </div>
 
+    <!-- 個人シフト詳細モーダル -->
+    <div class="modal fade" id="personalShiftModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">👤 個人シフト詳細</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="personalShiftContent">
+                    <div class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">読み込み中...</span>
+                        </div>
+                        <p class="mt-2">情報を取得中...</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">閉じる</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 個人シフト詳細を表示
+        function showPersonalShift(userId) {
+            const modal = new bootstrap.Modal(document.getElementById('personalShiftModal'));
+            const content = document.getElementById('personalShiftContent');
+            
+            // ローディング表示
+            content.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">読み込み中...</span>
+                    </div>
+                    <p class="mt-2">情報を取得中...</p>
+                </div>
+            `;
+            
+            modal.show();
+            
+            // AJAX でデータ取得
+            fetch(`?action=get_personal_shift&user_id=${userId}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Response data:', data);
+                    if (data.success && data.data) {
+                        displayPersonalShift(data.data);
+                    } else {
+                        content.innerHTML = `
+                            <div class="alert alert-danger">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                データの取得に失敗しました。<br>
+                                エラー: ${data.error || '不明なエラー'}
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    content.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            エラーが発生しました。<br>
+                            詳細: ${error.message}
+                        </div>
+                    `;
+                });
+        }
+        
+        // 個人シフト詳細を表示
+        function displayPersonalShift(data) {
+            const content = document.getElementById('personalShiftContent');
+            const user = data.user;
+            const shifts = data.shifts;
+            const skills = data.skills;
+            
+            let html = `
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <div class="card border-primary">
+                            <div class="card-header bg-primary text-white">
+                                <h6 class="mb-0"><i class="fas fa-user"></i> スタッフ情報</h6>
+                            </div>
+                            <div class="card-body">
+                                <table class="table table-sm table-borderless">
+                                    <tr>
+                                        <td class="fw-bold">名前:</td>
+                                        <td>${user.name}</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="fw-bold">ふりがな:</td>
+                                        <td>${user.furigana}</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="fw-bold">性別:</td>
+                                        <td><span class="badge bg-${user.gender === 'M' ? 'primary' : 'danger'}">${user.gender === 'M' ? '♂ 男性' : '♀ 女性'}</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td class="fw-bold">ランク:</td>
+                                        <td><span class="badge bg-${user.is_rank === 'ランナー' ? 'primary' : 'secondary'}">${user.is_rank}</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td class="fw-bold">高校生:</td>
+                                        <td><span class="badge bg-${user.is_highschool ? 'warning' : 'info'}">${user.is_highschool ? 'はい' : 'いいえ'}</span></td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="card border-secondary">
+                            <div class="card-header bg-secondary text-white">
+                                <h6 class="mb-0"><i class="fas fa-star"></i> スキル情報</h6>
+                            </div>
+                            <div class="card-body">
+            `;
+            
+            if (skills && skills.length > 0) {
+                skills.forEach(skill => {
+                    const badgeClass = skill.skill_level === 'できる' ? 'bg-success' : 
+                                     skill.skill_level === 'まあまあできる' ? 'bg-warning text-dark' : 'bg-danger';
+                    html += `
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="fw-bold">${skill.task_name}:</span>
+                                <span class="badge ${badgeClass}">${skill.skill_level}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+            } else {
+                html += '<p class="text-muted">スキル情報が登録されていません。</p>';
+            }
+            
+            html += `
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card border-info">
+                            <div class="card-header bg-info text-white">
+                                <h6 class="mb-0"><i class="fas fa-calendar-alt"></i> 参加シフト一覧 (${shifts.length}件)</h6>
+                            </div>
+                            <div class="card-body">
+            `;
+            
+            if (shifts && shifts.length > 0) {
+                shifts.forEach((shift, index) => {
+                    const availability = shift.availability;
+                    html += `
+                        <div class="card mb-3 ${index === 0 ? 'border-primary' : 'border-light'}">
+                            <div class="card-header ${index === 0 ? 'bg-primary text-white' : 'bg-light'}">
+                                <div class="row align-items-center">
+                                    <div class="col-md-8">
+                                        <h6 class="mb-1">${shift.event_type}</h6>
+                                        <small>${shift.shift_name || 'シフト'}</small>
+                                    </div>
+                                    <div class="col-md-4 text-end">
+                                        <span class="badge bg-${shift.assigned_role === 'ランナー' ? 'primary' : 'secondary'}">${shift.assigned_role}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <table class="table table-sm table-borderless">
+                                            <tr>
+                                                <td class="fw-bold">日付:</td>
+                                                <td>${new Date(shift.event_date).toLocaleDateString('ja-JP')}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="fw-bold">時間:</td>
+                                                <td>${shift.start_time.substr(0,5)} - ${shift.end_time.substr(0,5)}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="fw-bold">会場:</td>
+                                                <td>${shift.venue || '未設定'}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="fw-bold">作成日:</td>
+                                                <td>${new Date(shift.assignment_created_at).toLocaleDateString('ja-JP')}</td>
+                                            </tr>
+                                        </table>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <table class="table table-sm table-borderless">
+                                            <tr>
+                                                <td class="fw-bold">出勤可能:</td>
+                                                <td><span class="badge bg-${availability && availability.available ? 'success' : 'danger'}">${availability && availability.available ? '可能' : '不可'}</span></td>
+                                            </tr>
+                                            ${availability && availability.available ? `
+                                            <tr>
+                                                <td class="fw-bold">可能時間:</td>
+                                                <td>${availability.available_start_time ? availability.available_start_time.substr(0,5) + ' - ' + availability.available_end_time.substr(0,5) : '未設定'}</td>
+                                            </tr>
+                                            ` : ''}
+                                            <tr>
+                                                <td class="fw-bold">備考:</td>
+                                                <td>${availability && availability.note || '特になし'}</td>
+                                            </tr>
+                                            ${shift.assignment_note ? `
+                                            <tr>
+                                                <td class="fw-bold">割当備考:</td>
+                                                <td>${shift.assignment_note}</td>
+                                            </tr>
+                                            ` : ''}
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            } else {
+                html += '<p class="text-muted text-center">参加しているシフトがありません。</p>';
+            }
+            
+            html += `
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            content.innerHTML = html;
+        }
+    </script>
 </body>
 </html>
