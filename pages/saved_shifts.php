@@ -61,6 +61,33 @@ function getAssignedStaff($pdo, $eventId) {
     $stmt->execute([$eventId]);
     return $stmt->fetchAll();
 }
+
+// 出勤可能だが割当されなかったスタッフを取得
+function getUnassignedAvailableStaff($pdo, $eventId) {
+    // イベント情報を取得
+    $stmt = $pdo->prepare("SELECT event_date FROM events WHERE id = ?");
+    $stmt->execute([$eventId]);
+    $event = $stmt->fetch();
+    
+    if (!$event) {
+        return [];
+    }
+    
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT u.id, u.name, u.gender, u.is_rank,
+               av.available_start_time, av.available_end_time
+        FROM users u
+        JOIN availability av ON u.id = av.user_id
+        WHERE av.work_date = ? 
+        AND av.available = 1
+        AND u.id NOT IN (
+            SELECT user_id FROM assignments WHERE event_id = ?
+        )
+        ORDER BY u.is_rank DESC, u.furigana
+    ");
+    $stmt->execute([$event['event_date'], $eventId]);
+    return $stmt->fetchAll();
+}
 ?>
 
 <!DOCTYPE html>
@@ -114,6 +141,7 @@ function getAssignedStaff($pdo, $eventId) {
             <?php 
                 $creationMethod = getCreationMethod($pdo, $shift['id']);
                 $assignedStaff = getAssignedStaff($pdo, $shift['id']);
+                $unassignedStaff = getUnassignedAvailableStaff($pdo, $shift['id']);
             ?>
             <div class="col-12 mb-4">
                 <div class="card shadow-sm">
@@ -133,36 +161,76 @@ function getAssignedStaff($pdo, $eventId) {
                                 <div class="d-flex flex-column align-items-end gap-1">
                                     <span class="badge <?= $creationMethod['badge'] ?> fs-6"><?= $creationMethod['text'] ?></span>
                                     <span class="badge bg-primary"><?= $shift['assigned_count'] ?>名割当</span>
+                                    <?php if (count($unassignedStaff) > 0): ?>
+                                    <span class="badge bg-warning text-dark"><?= count($unassignedStaff) ?>名未割当</span>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
                     </div>
                     <div class="card-body">
-                        <!-- スタッフ一覧を2列で表示 -->
-                        <div class="row g-3">
-                            <?php foreach ($assignedStaff as $index => $staff): ?>
-                            <div class="col-md-6">
-                                <div class="d-flex align-items-center p-2 bg-light rounded">
-                                    <div class="me-3">
-                                        <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-size: 14px; font-weight: bold;">
-                                            <?= $index + 1 ?>
+                        <!-- 割当スタッフ一覧 -->
+                        <div class="mb-4">
+                            <h6 class="text-success mb-2">✅ 割当スタッフ (<?= count($assignedStaff) ?>名)</h6>
+                            <div class="row g-3">
+                                <?php foreach ($assignedStaff as $index => $staff): ?>
+                                <div class="col-md-6">
+                                    <div class="d-flex align-items-center p-2 bg-success bg-opacity-10 border border-success rounded">
+                                        <div class="me-3">
+                                            <div class="bg-success text-white rounded-circle d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-size: 14px; font-weight: bold;">
+                                                <?= $index + 1 ?>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div class="flex-grow-1">
-                                        <div class="fw-bold text-dark"><?= h($staff['name']) ?></div>
-                                        <div class="d-flex gap-1 mt-1">
-                                            <?php if ($staff['is_rank'] === 'ランナー'): ?>
-                                            <span class="badge bg-primary">ランナー</span>
-                                            <?php else: ?>
-                                            <span class="badge bg-secondary">その他</span>
-                                            <?php endif; ?>
-                                            <span class="badge bg-success"><?= $staff['gender'] === 'M' ? '♂' : '♀' ?></span>
+                                        <div class="flex-grow-1">
+                                            <div class="fw-bold text-dark"><?= h($staff['name']) ?></div>
+                                            <div class="d-flex gap-1 mt-1">
+                                                <?php if ($staff['is_rank'] === 'ランナー'): ?>
+                                                <span class="badge bg-primary">ランナー</span>
+                                                <?php else: ?>
+                                                <span class="badge bg-secondary">その他</span>
+                                                <?php endif; ?>
+                                                <span class="badge bg-success"><?= $staff['gender'] === 'M' ? '♂' : '♀' ?></span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
+                                <?php endforeach; ?>
                             </div>
-                            <?php endforeach; ?>
                         </div>
+                        
+                        <!-- 未割当の出勤可能スタッフ -->
+                        <?php if (!empty($unassignedStaff)): ?>
+                        <div class="mb-3">
+                            <h6 class="text-warning mb-2">⚠️ 出勤可能だが未割当 (<?= count($unassignedStaff) ?>名)</h6>
+                            <div class="row g-3">
+                                <?php foreach ($unassignedStaff as $index => $staff): ?>
+                                <div class="col-md-6">
+                                    <div class="d-flex align-items-center p-2 bg-warning bg-opacity-10 border border-warning rounded">
+                                        <div class="me-3">
+                                            <div class="bg-warning text-dark rounded-circle d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-size: 14px; font-weight: bold;">
+                                                <?= $index + 1 ?>
+                                            </div>
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div class="fw-bold text-dark"><?= h($staff['name']) ?></div>
+                                            <div class="d-flex gap-1 mt-1">
+                                                <?php if ($staff['is_rank'] === 'ランナー'): ?>
+                                                <span class="badge bg-primary">ランナー</span>
+                                                <?php else: ?>
+                                                <span class="badge bg-secondary">その他</span>
+                                                <?php endif; ?>
+                                                <span class="badge bg-secondary"><?= $staff['gender'] === 'M' ? '♂' : '♀' ?></span>
+                                                <?php if ($staff['available_start_time'] && $staff['available_end_time']): ?>
+                                                <span class="badge bg-info"><?= substr($staff['available_start_time'], 0, 5) ?>-<?= substr($staff['available_end_time'], 0, 5) ?></span>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <?php endif; ?>
                     </div>
                         
                         <div class="text-muted small">
