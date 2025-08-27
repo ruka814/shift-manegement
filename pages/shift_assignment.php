@@ -133,7 +133,7 @@ if ($_GET['load_saved'] ?? '' === '1' && $selectedEventId) {
 }
 
 // イベント一覧取得
-$stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, description, needs, total_staff_required FROM events ORDER BY event_date, start_time");
+$stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, description, needs, total_staff_required, light_count, parents_count FROM events ORDER BY event_date, start_time");
 $events = $stmt->fetchAll();
 
 // 選択されたイベント情報取得
@@ -1256,6 +1256,14 @@ function calculateShortageStats($assignments, $event) {
                 s.skills.some(skill => skill.task_name === 'ビュッフェランナー')
             ).length;
             
+            // 🆕 婚礼用：ライトと両親のスタッフ数を計算（時間フィルタ後）
+            const lightStaff = timeFilteredStaff.filter(s => 
+                s.skills.some(skill => skill.task_name === 'ライト')
+            ).length;
+            const parentsStaff = timeFilteredStaff.filter(s => 
+                s.skills.some(skill => skill.task_name === '両親')
+            ).length;
+            
             // その他（ランナー以外）の数を正確に計算
             // 🆕 改善: その他にはランナーも含めるが、選択されているランナーは除外
             const allStaff = timeFilteredStaff.length;
@@ -1266,6 +1274,8 @@ function calculateShortageStats($assignments, $event) {
             // イベント種別に応じてランナーカテゴリを制限
             let showCourseRunner = true;
             let showBuffetRunner = true;
+            let showLight = false;
+            let showParents = false;
             let categoryMessage = '';
             
             if (selectedEvent) {
@@ -1278,13 +1288,17 @@ function calculateShortageStats($assignments, $event) {
                     categoryMessage = '<div class="alert alert-info"><i class="fas fa-info-circle"></i> ビュッフェイベントのため、ビュッフェランナーのみ選択可能です</div>';
                 } else if (eventType === '婚礼') {
                     showBuffetRunner = false;
-                    categoryMessage = '<div class="alert alert-info"><i class="fas fa-info-circle"></i> 婚礼イベントのため、コースランナーのみ選択可能です</div>';
+                    showLight = true;
+                    showParents = true;
+                    categoryMessage = '<div class="alert alert-info"><i class="fas fa-heart text-danger"></i> 婚礼イベントのため、コースランナー・ライト・両親対応スタッフを選択できます</div>';
                 }
             }
             
             // デフォルト値の計算（イベント種別に応じて調整）
             let defaultCourseRunner = 0;
             let defaultBuffetRunner = 0;
+            let defaultLight = 0;
+            let defaultParents = 0;
             let defaultOther = Math.min(Math.ceil(defaultStaffCount * 0.4), otherCandidatesCount);
             
             if (showCourseRunner && showBuffetRunner) {
@@ -1292,8 +1306,28 @@ function calculateShortageStats($assignments, $event) {
                 defaultCourseRunner = Math.min(Math.ceil(defaultStaffCount * 0.3), courseRunners);
                 defaultBuffetRunner = Math.min(Math.ceil(defaultStaffCount * 0.3), buffetRunners);
             } else if (showCourseRunner) {
-                // コースランナーのみ（コース、婚礼）
-                defaultCourseRunner = Math.min(Math.ceil(defaultStaffCount * 0.6), courseRunners);
+                if (showLight && showParents) {
+                    // 婚礼の場合
+                    defaultCourseRunner = Math.min(Math.ceil(defaultStaffCount * 0.4), courseRunners);
+                    
+                    // イベント設定から必要数を取得
+                    if (selectedEvent.light_count) {
+                        defaultLight = Math.min(parseInt(selectedEvent.light_count), lightStaff);
+                    } else {
+                        defaultLight = Math.min(Math.ceil(defaultStaffCount * 0.2), lightStaff);
+                    }
+                    
+                    if (selectedEvent.parents_count) {
+                        defaultParents = Math.min(parseInt(selectedEvent.parents_count), parentsStaff);
+                    } else {
+                        defaultParents = Math.min(Math.ceil(defaultStaffCount * 0.2), parentsStaff);
+                    }
+                    
+                    defaultOther = Math.min(Math.ceil(defaultStaffCount * 0.2), otherCandidatesCount);
+                } else {
+                    // コースランナーのみ（コース）
+                    defaultCourseRunner = Math.min(Math.ceil(defaultStaffCount * 0.6), courseRunners);
+                }
             } else if (showBuffetRunner) {
                 // ビュッフェランナーのみ（ビュッフェ）
                 defaultBuffetRunner = Math.min(Math.ceil(defaultStaffCount * 0.6), buffetRunners);
@@ -1337,6 +1371,28 @@ function calculateShortageStats($assignments, $event) {
                                                     <i class="fas fa-utensils text-warning"></i> ビュッフェランナー
                                                 </label>
                                                 <input type="number" class="form-control" id="buffetRunnerCount" min="0" max="${buffetRunners}" value="${defaultBuffetRunner}">
+                                            </div>
+                                        </div>
+                                        ` : ''}
+                                        ${showLight ? `
+                                        <div class="col-lg-4 col-md-6">
+                                            <div class="mb-3">
+                                                <label for="lightCount" class="form-label">
+                                                    <i class="fas fa-lightbulb text-info"></i> ライト要員
+                                                </label>
+                                                <input type="number" class="form-control" id="lightCount" min="0" max="${lightStaff}" value="${defaultLight}">
+                                                <small class="form-text text-muted">候補: ${lightStaff}名</small>
+                                            </div>
+                                        </div>
+                                        ` : ''}
+                                        ${showParents ? `
+                                        <div class="col-lg-4 col-md-6">
+                                            <div class="mb-3">
+                                                <label for="parentsCount" class="form-label">
+                                                    <i class="fas fa-users-cog text-secondary"></i> 両親対応
+                                                </label>
+                                                <input type="number" class="form-control" id="parentsCount" min="0" max="${parentsStaff}" value="${defaultParents}">
+                                                <small class="form-text text-muted">候補: ${parentsStaff}名</small>
                                             </div>
                                         </div>
                                         ` : ''}
@@ -1392,13 +1448,17 @@ function calculateShortageStats($assignments, $event) {
             // フィールドが存在する場合のみ値を取得、存在しない場合は0
             const courseRunnerCountEl = document.getElementById('courseRunnerCount');
             const buffetRunnerCountEl = document.getElementById('buffetRunnerCount');
+            const lightCountEl = document.getElementById('lightCount');
+            const parentsCountEl = document.getElementById('parentsCount');
             const otherCountEl = document.getElementById('otherCount');
             
             const courseRunnerCount = courseRunnerCountEl ? parseInt(courseRunnerCountEl.value) || 0 : 0;
             const buffetRunnerCount = buffetRunnerCountEl ? parseInt(buffetRunnerCountEl.value) || 0 : 0;
+            const lightCount = lightCountEl ? parseInt(lightCountEl.value) || 0 : 0;
+            const parentsCount = parentsCountEl ? parseInt(parentsCountEl.value) || 0 : 0;
             const otherCount = otherCountEl ? parseInt(otherCountEl.value) || 0 : 0;
             
-            if (courseRunnerCount + buffetRunnerCount + otherCount === 0) {
+            if (courseRunnerCount + buffetRunnerCount + lightCount + parentsCount + otherCount === 0) {
                 alert('最低1名は選択してください');
                 return;
             }
@@ -1427,6 +1487,12 @@ function calculateShortageStats($assignments, $event) {
                 s.is_rank === 'ランナー' && 
                 s.skills.some(skill => skill.task_name === 'ビュッフェランナー')
             );
+            const lightStaffList = timeFilteredStaff.filter(s => 
+                s.skills.some(skill => skill.task_name === 'ライト')
+            );
+            const parentsStaffList = timeFilteredStaff.filter(s => 
+                s.skills.some(skill => skill.task_name === '両親')
+            );
             
             // 🆕 改善: その他は全スタッフから選択済みランナーを除外
             let selectedRunners = [];
@@ -1435,12 +1501,16 @@ function calculateShortageStats($assignments, $event) {
             if (balanceGender) {
                 selectedRunners = [
                     ...selectWithGenderBalance(courseRunners, Math.min(courseRunnerCount, courseRunners.length)).map(s => ({...s, selectionCategory: 'courseRunner'})),
-                    ...selectWithGenderBalance(buffetRunners, Math.min(buffetRunnerCount, buffetRunners.length)).map(s => ({...s, selectionCategory: 'buffetRunner'}))
+                    ...selectWithGenderBalance(buffetRunners, Math.min(buffetRunnerCount, buffetRunners.length)).map(s => ({...s, selectionCategory: 'buffetRunner'})),
+                    ...selectWithGenderBalance(lightStaffList, Math.min(lightCount, lightStaffList.length)).map(s => ({...s, selectionCategory: 'light'})),
+                    ...selectWithGenderBalance(parentsStaffList, Math.min(parentsCount, parentsStaffList.length)).map(s => ({...s, selectionCategory: 'parents'}))
                 ];
             } else {
                 selectedRunners = [
                     ...courseRunners.sort(() => 0.5 - Math.random()).slice(0, Math.min(courseRunnerCount, courseRunners.length)).map(s => ({...s, selectionCategory: 'courseRunner'})),
-                    ...buffetRunners.sort(() => 0.5 - Math.random()).slice(0, Math.min(buffetRunnerCount, buffetRunners.length)).map(s => ({...s, selectionCategory: 'buffetRunner'}))
+                    ...buffetRunners.sort(() => 0.5 - Math.random()).slice(0, Math.min(buffetRunnerCount, buffetRunners.length)).map(s => ({...s, selectionCategory: 'buffetRunner'})),
+                    ...lightStaffList.sort(() => 0.5 - Math.random()).slice(0, Math.min(lightCount, lightStaffList.length)).map(s => ({...s, selectionCategory: 'light'})),
+                    ...parentsStaffList.sort(() => 0.5 - Math.random()).slice(0, Math.min(parentsCount, parentsStaffList.length)).map(s => ({...s, selectionCategory: 'parents'}))
                 ];
             }
             
@@ -1461,6 +1531,8 @@ function calculateShortageStats($assignments, $event) {
             let shortageMessages = [];
             let actualCourseRunnerCount = Math.min(courseRunnerCount, courseRunners.length);
             let actualBuffetRunnerCount = Math.min(buffetRunnerCount, buffetRunners.length);
+            let actualLightCount = Math.min(lightCount, lightStaffList.length);
+            let actualParentsCount = Math.min(parentsCount, parentsStaffList.length);
             let actualOtherCount = Math.min(otherCount, otherCandidates.length);
             
             if (courseRunnerCount > courseRunners.length) {
@@ -1471,6 +1543,16 @@ function calculateShortageStats($assignments, $event) {
             if (buffetRunnerCount > buffetRunners.length) {
                 const shortage = buffetRunnerCount - buffetRunners.length;
                 shortageMessages.push(`ビュッフェランナー: ${shortage}名不足（${buffetRunners.length}名のみ選択）`);
+            }
+            
+            if (lightCount > lightStaffList.length) {
+                const shortage = lightCount - lightStaffList.length;
+                shortageMessages.push(`ライト要員: ${shortage}名不足（${lightStaffList.length}名のみ選択）`);
+            }
+            
+            if (parentsCount > parentsStaffList.length) {
+                const shortage = parentsCount - parentsStaffList.length;
+                shortageMessages.push(`両親対応: ${shortage}名不足（${parentsStaffList.length}名のみ選択）`);
             }
             
             if (otherCount > otherCandidates.length) {
@@ -1505,7 +1587,9 @@ function calculateShortageStats($assignments, $event) {
             const selectionDetails = {
                 totalAvailable: currentAvailableStaff.length,
                 timeFiltered: timeFilteredStaff.length,
-                selectedRunners: selectedRunners.length,
+                selectedRunners: selectedRunners.filter(s => s.selectionCategory === 'courseRunner' || s.selectionCategory === 'buffetRunner').length,
+                selectedLight: selectedRunners.filter(s => s.selectionCategory === 'light').length,
+                selectedParents: selectedRunners.filter(s => s.selectionCategory === 'parents').length,
                 selectedOthers: selectedOthers.length,
                 otherCandidates: otherCandidates.length,
                 runnersInOthers: selectedOthers.filter(s => s.is_rank === 'ランナー').length
@@ -1583,6 +1667,8 @@ function calculateShortageStats($assignments, $event) {
                             <i class="fas fa-dice"></i> <strong>ランダム選択詳細</strong><br>
                             • 利用可能スタッフ: ${selectionDetails.totalAvailable}名<br>
                             • ランナー枠で選択: ${selectionDetails.selectedRunners}名<br>
+                            ${selectionDetails.selectedLight > 0 ? `• ライト枠で選択: ${selectionDetails.selectedLight}名<br>` : ''}
+                            ${selectionDetails.selectedParents > 0 ? `• 両親枠で選択: ${selectionDetails.selectedParents}名<br>` : ''}
                             • その他枠で選択: ${selectionDetails.selectedOthers}名 (うちランナー ${selectionDetails.runnersInOthers}名)<br>
                             • その他候補者数: ${selectionDetails.otherCandidates}名
                         </div>
@@ -1591,7 +1677,7 @@ function calculateShortageStats($assignments, $event) {
             }
             
             // 各カテゴリに分ける
-            let courseRunners, buffetRunners, othersSelected;
+            let courseRunners, buffetRunners, lightStaffSelected, parentsStaffSelected, othersSelected;
             
             if (selectionDetails && (selectionDetails.manualSelection || selectionDetails.editedSelection)) {
                 // 手動選択または編集済み選択の場合は、スキルに基づいてカテゴリ分け
@@ -1604,13 +1690,24 @@ function calculateShortageStats($assignments, $event) {
                     staff.skills.some(skill => skill.task_name === 'ビュッフェランナー') &&
                     !courseRunners.includes(staff) // コースランナーと重複しない
                 );
+                lightStaffSelected = selectedStaff.filter(staff => 
+                    staff.skills.some(skill => skill.task_name === 'ライト') &&
+                    !courseRunners.includes(staff) && !buffetRunners.includes(staff) // ランナーと重複しない
+                );
+                parentsStaffSelected = selectedStaff.filter(staff => 
+                    staff.skills.some(skill => skill.task_name === '両親') &&
+                    !courseRunners.includes(staff) && !buffetRunners.includes(staff) && !lightStaffSelected.includes(staff) // 他と重複しない
+                );
                 othersSelected = selectedStaff.filter(staff => 
-                    !courseRunners.includes(staff) && !buffetRunners.includes(staff)
+                    !courseRunners.includes(staff) && !buffetRunners.includes(staff) && 
+                    !lightStaffSelected.includes(staff) && !parentsStaffSelected.includes(staff)
                 );
             } else {
                 // ランダム選択の場合は、選択カテゴリで判定
                 courseRunners = selectedStaff.filter(staff => staff.selectionCategory === 'courseRunner');
                 buffetRunners = selectedStaff.filter(staff => staff.selectionCategory === 'buffetRunner');
+                lightStaffSelected = selectedStaff.filter(staff => staff.selectionCategory === 'light');
+                parentsStaffSelected = selectedStaff.filter(staff => staff.selectionCategory === 'parents');
                 othersSelected = selectedStaff.filter(staff => staff.selectionCategory === 'other');
             }
             
@@ -1679,10 +1776,72 @@ function calculateShortageStats($assignments, $event) {
                 });
             }
             
+            // ライトセクション
+            if (lightStaffSelected.length > 0) {
+                staffHtml += `
+                    <div class="col-12 mb-3 ${(courseRunners.length > 0 || buffetRunners.length > 0) ? 'mt-3' : ''}">
+                        <h6 class="text-info">
+                            <i class="fas fa-lightbulb"></i> ライト要員 (${lightStaffSelected.length}名)
+                        </h6>
+                    </div>
+                `;
+                
+                lightStaffSelected.forEach((staff, index) => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    staffHtml += `
+                        <div class="col-md-6 mb-2">
+                            <div class="border border-info rounded p-2 bg-light">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold text-info">${index + 1}. ${staff.name}</div>
+                                        <div class="text-muted small">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-info">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            // 両親対応セクション
+            if (parentsStaffSelected.length > 0) {
+                staffHtml += `
+                    <div class="col-12 mb-3 ${(courseRunners.length > 0 || buffetRunners.length > 0 || lightStaffSelected.length > 0) ? 'mt-3' : ''}">
+                        <h6 class="text-secondary">
+                            <i class="fas fa-users-cog"></i> 両親対応 (${parentsStaffSelected.length}名)
+                        </h6>
+                    </div>
+                `;
+                
+                parentsStaffSelected.forEach((staff, index) => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    staffHtml += `
+                        <div class="col-md-6 mb-2">
+                            <div class="border border-secondary rounded p-2 bg-light">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold text-secondary">${index + 1}. ${staff.name}</div>
+                                        <div class="text-muted small">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-secondary">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
             // その他セクション（ランナー含む）
             if (othersSelected.length > 0) {
                 staffHtml += `
-                    <div class="col-12 mb-3 ${(courseRunners.length > 0 || buffetRunners.length > 0) ? 'mt-3' : ''}">
+                    <div class="col-12 mb-3 ${(courseRunners.length > 0 || buffetRunners.length > 0 || lightStaffSelected.length > 0 || parentsStaffSelected.length > 0) ? 'mt-3' : ''}">
                         <h6 class="text-success">
                             <i class="fas fa-users"></i> その他 (${othersSelected.length}名)
                             ${othersSelected.filter(s => s.is_rank === 'ランナー').length > 0 ? 
@@ -1792,7 +1951,9 @@ function calculateShortageStats($assignments, $event) {
             const summaryText = [
                 courseRunners.length > 0 ? `コース${courseRunners.length}名` : '',
                 buffetRunners.length > 0 ? `ビュッフェ${buffetRunners.length}名` : '',
-                nonRunners.length > 0 ? `その他${nonRunners.length}名` : ''
+                lightStaffSelected.length > 0 ? `ライト${lightStaffSelected.length}名` : '',
+                parentsStaffSelected.length > 0 ? `両親${parentsStaffSelected.length}名` : '',
+                othersSelected.length > 0 ? `その他${othersSelected.length}名` : ''
             ].filter(text => text).join('・');
             
             alertDiv.innerHTML = `🎲 ランダム選択されたスタッフ (${totalCount}名中 ${summaryText})`;
