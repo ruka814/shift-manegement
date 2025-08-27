@@ -1335,13 +1335,37 @@ function calculateShortageStats($assignments, $event) {
             
             const modalHtml = `
                 <div class="modal fade" id="randomSelectionModal" tabindex="-1">
-                    <div class="modal-dialog">
+                    <div class="modal-dialog modal-lg">
                         <div class="modal-content">
                             <div class="modal-header">
                                 <h5 class="modal-title">🎲 ランダム選択設定</h5>
                                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                             </div>
                             <div class="modal-body">
+                                ${selectedEvent && selectedEvent.total_staff_required ? `
+                                <div class="alert alert-primary mb-3">
+                                    <div class="row align-items-center">
+                                        <div class="col-md-8">
+                                            <h6 class="mb-1"><i class="fas fa-users"></i> 総必要人数</h6>
+                                            <div class="h4 mb-0 text-primary">${selectedEvent.total_staff_required}名</div>
+                                        </div>
+                                        <div class="col-md-4 text-end">
+                                            <small class="text-muted">
+                                                ${selectedEvent.event_type} - ${selectedEvent.event_date}<br>
+                                                ${selectedEvent.start_time ? selectedEvent.start_time.substr(0,5) : ''} - ${selectedEvent.end_time ? selectedEvent.end_time.substr(0,5) : ''}
+                                            </small>
+                                        </div>
+                                    </div>
+                                    ${selectedEvent.event_type === '婚礼' && (selectedEvent.light_count || selectedEvent.parents_count) ? `
+                                    <hr class="my-2">
+                                    <div class="d-flex gap-3 small">
+                                        ${selectedEvent.light_count ? `<span><i class="fas fa-lightbulb text-info"></i> ライト: ${selectedEvent.light_count}名</span>` : ''}
+                                        ${selectedEvent.parents_count ? `<span><i class="fas fa-users-cog text-secondary"></i> 両親対応: ${selectedEvent.parents_count}名</span>` : ''}
+                                    </div>
+                                    ` : ''}
+                                </div>
+                                ` : ''}
+                                
                                 ${categoryMessage}
                                 
                                 ${excludedByTime > 0 ? `
@@ -1412,6 +1436,25 @@ function calculateShortageStats($assignments, $event) {
                                     </div>
                                 </div>
                                 
+                                <!-- 🆕 選択合計表示 -->
+                                <div class="alert alert-light border" id="selectionSummary">
+                                    <div class="row align-items-center">
+                                        <div class="col-md-6">
+                                            <h6 class="mb-1"><i class="fas fa-calculator"></i> 選択合計</h6>
+                                            <div class="h5 mb-0" id="totalSelected">0名</div>
+                                        </div>
+                                        <div class="col-md-6 text-end">
+                                            <div id="comparisonText" class="small text-muted">
+                                                ${selectedEvent && selectedEvent.total_staff_required ? 
+                                                    `必要: ${selectedEvent.total_staff_required}名` : 
+                                                    '必要人数未設定'
+                                                }
+                                            </div>
+                                            <div id="differenceText" class="fw-bold"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
                                 <div class="form-check">
                                     <input class="form-check-input" type="checkbox" id="balanceGender">
                                     <label class="form-check-label" for="balanceGender">
@@ -1440,6 +1483,53 @@ function calculateShortageStats($assignments, $event) {
             // モーダル表示
             const modal = new bootstrap.Modal(document.getElementById('randomSelectionModal'));
             modal.show();
+            
+            // 🆕 入力フィールドの変更を監視して合計を更新
+            setTimeout(() => {
+                const inputs = ['courseRunnerCount', 'buffetRunnerCount', 'lightCount', 'parentsCount', 'otherCount'];
+                const requiredCount = selectedEvent && selectedEvent.total_staff_required ? parseInt(selectedEvent.total_staff_required) : 0;
+                
+                function updateSelectionSummary() {
+                    let total = 0;
+                    inputs.forEach(inputId => {
+                        const input = document.getElementById(inputId);
+                        if (input) {
+                            total += parseInt(input.value) || 0;
+                        }
+                    });
+                    
+                    // 合計表示を更新
+                    const totalSelectedEl = document.getElementById('totalSelected');
+                    if (totalSelectedEl) {
+                        totalSelectedEl.textContent = total + '名';
+                    }
+                    
+                    // 差分表示を更新
+                    const differenceTextEl = document.getElementById('differenceText');
+                    if (differenceTextEl && requiredCount > 0) {
+                        const difference = total - requiredCount;
+                        if (difference === 0) {
+                            differenceTextEl.innerHTML = '<span class="text-success"><i class="fas fa-check"></i> 過不足なし</span>';
+                        } else if (difference > 0) {
+                            differenceTextEl.innerHTML = `<span class="text-info"><i class="fas fa-plus"></i> ${difference}名余裕</span>`;
+                        } else {
+                            differenceTextEl.innerHTML = `<span class="text-warning"><i class="fas fa-minus"></i> ${Math.abs(difference)}名不足</span>`;
+                        }
+                    }
+                }
+                
+                // 初期値で計算
+                updateSelectionSummary();
+                
+                // 各入力フィールドに変更イベントリスナーを追加
+                inputs.forEach(inputId => {
+                    const input = document.getElementById(inputId);
+                    if (input) {
+                        input.addEventListener('input', updateSelectionSummary);
+                        input.addEventListener('change', updateSelectionSummary);
+                    }
+                });
+            }, 100);
         }
         
         function executeRandomSelection() {
