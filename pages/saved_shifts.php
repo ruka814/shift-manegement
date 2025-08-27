@@ -40,6 +40,60 @@ if ($_GET['action'] ?? '' === 'get_personal_shift') {
     }
 }
 
+// 🆕 スタッフ追加処理
+if ($_POST['action'] ?? '' === 'add_staff') {
+    try {
+        $eventId = $_POST['event_id'];
+        $userId = $_POST['user_id'];
+        
+        // 既に割当されていないかチェック
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM assignments WHERE event_id = ? AND user_id = ?");
+        $stmt->execute([$eventId, $userId]);
+        if ($stmt->fetchColumn() > 0) {
+            echo json_encode(['success' => false, 'error' => 'このスタッフは既に割当されています']);
+            exit;
+        }
+        
+        // ユーザー情報を取得してroleを決定
+        $stmt = $pdo->prepare("SELECT is_rank FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $user = $stmt->fetch();
+        $role = $user['is_rank'] ?? 'その他';
+        
+        // スタッフを追加
+        $stmt = $pdo->prepare("
+            INSERT INTO assignments (event_id, user_id, assigned_role, note, created_at) 
+            VALUES (?, ?, ?, '手動追加', NOW())
+        ");
+        $stmt->execute([$eventId, $userId, $role]);
+        
+        echo json_encode(['success' => true, 'message' => 'スタッフを追加しました']);
+    } catch(Exception $e) {
+        echo json_encode(['success' => false, 'error' => '追加エラー: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// 🆕 スタッフ削除処理
+if ($_POST['action'] ?? '' === 'remove_staff') {
+    try {
+        $eventId = $_POST['event_id'];
+        $userId = $_POST['user_id'];
+        
+        $stmt = $pdo->prepare("DELETE FROM assignments WHERE event_id = ? AND user_id = ?");
+        $stmt->execute([$eventId, $userId]);
+        
+        if ($stmt->rowCount() > 0) {
+            echo json_encode(['success' => true, 'message' => 'スタッフを削除しました']);
+        } else {
+            echo json_encode(['success' => false, 'error' => '削除対象が見つかりません']);
+        }
+    } catch(Exception $e) {
+        echo json_encode(['success' => false, 'error' => '削除エラー: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 // シフト削除処理
 if ($_POST['action'] ?? '' === 'delete_shift') {
     try {
@@ -94,21 +148,69 @@ function getCreationMethod($pdo, $eventId) {
 
 // 割当されたスタッフ一覧を取得
 function getAssignedStaff($pdo, $eventId) {
+    // イベント情報を取得
+    $stmt = $pdo->prepare("SELECT event_date, start_time, end_time FROM events WHERE id = ?");
+    $stmt->execute([$eventId]);
+    $event = $stmt->fetch();
+    
     $stmt = $pdo->prepare("
-        SELECT u.id, u.name, u.gender, u.is_rank, a.assigned_role
+        SELECT u.id, u.name, u.gender, u.is_rank, a.assigned_role,
+               av.available_start_time, av.available_end_time
         FROM assignments a
         JOIN users u ON a.user_id = u.id
+        LEFT JOIN availability av ON u.id = av.user_id AND av.work_date = ?
         WHERE a.event_id = ?
         ORDER BY a.assigned_role, u.furigana
     ");
-    $stmt->execute([$eventId]);
-    return $stmt->fetchAll();
+    $stmt->execute([$event['event_date'], $eventId]);
+    $staff = $stmt->fetchAll();
+    
+    // 各スタッフに時間重複情報を追加
+    foreach ($staff as &$member) {
+        $member['event_start_time'] = $event['start_time'];
+        $member['event_end_time'] = $event['end_time'];
+        
+        if ($member['available_start_time'] && $member['available_end_time'] &&
+            $event['start_time'] && $event['end_time']) {
+            $member['overlap_info'] = checkTimeOverlapForSavedShift(
+                $event['start_time'], $event['end_time'],
+                $member['available_start_time'], $member['available_end_time']
+            );
+        } else {
+            $member['overlap_info'] = ['type' => 'unknown', 'hasOverlap' => false];
+        }
+    }
+    
+    return $staff;
+}
+
+// 🆕 時間重複チェック関数（保存済みシフト用）
+function checkTimeOverlapForSavedShift($eventStart, $eventEnd, $availableStart, $availableEnd) {
+    // 時間文字列をDateオブジェクトに変換（同じ日付で比較）
+    $baseDate = '2024-01-01 ';
+    $eventStartTime = strtotime($baseDate . $eventStart);
+    $eventEndTime = strtotime($baseDate . $eventEnd);
+    $availableStartTime = strtotime($baseDate . $availableStart);
+    $availableEndTime = strtotime($baseDate . $availableEnd);
+    
+    // 重複なし
+    if ($eventEndTime <= $availableStartTime || $eventStartTime >= $availableEndTime) {
+        return ['hasOverlap' => false, 'type' => 'none'];
+    }
+    
+    // 完全に含む（出勤時間が宴会時間を完全にカバー）
+    if ($availableStartTime <= $eventStartTime && $availableEndTime >= $eventEndTime) {
+        return ['hasOverlap' => true, 'type' => 'complete'];
+    }
+    
+    // 一部重複
+    return ['hasOverlap' => true, 'type' => 'partial'];
 }
 
 // 出勤可能だが割当されなかったスタッフを取得
 function getUnassignedAvailableStaff($pdo, $eventId) {
     // イベント情報を取得
-    $stmt = $pdo->prepare("SELECT event_date FROM events WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT event_date, start_time, end_time FROM events WHERE id = ?");
     $stmt->execute([$eventId]);
     $event = $stmt->fetch();
     
@@ -129,7 +231,25 @@ function getUnassignedAvailableStaff($pdo, $eventId) {
         ORDER BY u.is_rank DESC, u.furigana
     ");
     $stmt->execute([$event['event_date'], $eventId]);
-    return $stmt->fetchAll();
+    $staff = $stmt->fetchAll();
+    
+    // 各スタッフに時間重複情報を追加
+    foreach ($staff as &$member) {
+        $member['event_start_time'] = $event['start_time'];
+        $member['event_end_time'] = $event['end_time'];
+        
+        if ($member['available_start_time'] && $member['available_end_time'] &&
+            $event['start_time'] && $event['end_time']) {
+            $member['overlap_info'] = checkTimeOverlapForSavedShift(
+                $event['start_time'], $event['end_time'],
+                $member['available_start_time'], $member['available_end_time']
+            );
+        } else {
+            $member['overlap_info'] = ['type' => 'unknown', 'hasOverlap' => false];
+        }
+    }
+    
+    return $staff;
 }
 
 // 個人の全シフト詳細情報を取得
@@ -316,6 +436,32 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="../assets/css/style.css">
+    <style>
+        /* 🆕 時間重複表示用のスタイル */
+        .bg-light-success {
+            background-color: rgba(25, 135, 84, 0.1) !important;
+        }
+        
+        .bg-light-info {
+            background-color: rgba(13, 202, 240, 0.1) !important;
+        }
+        
+        .bg-light-warning {
+            background-color: rgba(255, 193, 7, 0.1) !important;
+        }
+        
+        .border-success {
+            border-color: #198754 !important;
+        }
+        
+        .border-info {
+            border-color: #0dcaf0 !important;
+        }
+        
+        .border-warning {
+            border-color: #ffc107 !important;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -339,6 +485,31 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
             <a href="shift_assignment.php" class="btn btn-primary">
                 ➕ 新規シフト作成
             </a>
+        </div>
+        
+        <!-- 🆕 時間重複の凡例 -->
+        <div class="card mb-4">
+            <div class="card-body py-2">
+                <div class="d-flex align-items-center gap-4 small">
+                    <span class="text-muted fw-bold">時間重複表示:</span>
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-check-circle text-success me-1"></i>
+                        <span>完全重複</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-info-circle text-info me-1"></i>
+                        <span>一部重複</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-exclamation-triangle text-warning me-1"></i>
+                        <span>重複なし</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-question-circle text-secondary me-1"></i>
+                        <span>時間情報不明</span>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <?php if (empty($savedShifts)): ?>
@@ -394,8 +565,36 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
                             <h6 class="text-success mb-2">✅ 割当スタッフ (<?= count($assignedStaff) ?>名)</h6>
                             <div class="row g-3">
                                 <?php foreach ($assignedStaff as $index => $staff): ?>
+                                <?php
+                                    // 🆕 時間重複に基づく色とアイコンの設定
+                                    $overlapClass = '';
+                                    $overlapIcon = '';
+                                    
+                                    if (isset($staff['overlap_info'])) {
+                                        switch ($staff['overlap_info']['type']) {
+                                            case 'complete':
+                                                $overlapClass = 'border-success bg-light-success';
+                                                $overlapIcon = '<i class="fas fa-check-circle text-success me-1" title="完全重複：宴会時間を完全にカバー"></i>';
+                                                break;
+                                            case 'partial':
+                                                $overlapClass = 'border-info bg-light-info';
+                                                $overlapIcon = '<i class="fas fa-info-circle text-info me-1" title="一部重複：宴会時間と一部重複"></i>';
+                                                break;
+                                            case 'none':
+                                                $overlapClass = 'border-warning bg-light-warning';
+                                                $overlapIcon = '<i class="fas fa-exclamation-triangle text-warning me-1" title="重複なし：時間調整が必要"></i>';
+                                                break;
+                                            default:
+                                                $overlapClass = 'border-secondary bg-light';
+                                                $overlapIcon = '<i class="fas fa-question-circle text-secondary me-1" title="時間情報不明"></i>';
+                                        }
+                                    } else {
+                                        $overlapClass = 'border-success bg-success bg-opacity-10';
+                                        $overlapIcon = '';
+                                    }
+                                ?>
                                 <div class="col-md-6">
-                                    <div class="d-flex align-items-center p-2 bg-success bg-opacity-10 border border-success rounded">
+                                    <div class="d-flex align-items-center p-2 <?= $overlapClass ?> rounded">
                                         <div class="me-3">
                                             <div class="bg-success text-white rounded-circle d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-size: 14px; font-weight: bold;">
                                                 <?= $index + 1 ?>
@@ -405,7 +604,7 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
                                             <div class="fw-bold text-dark">
                                                 <a href="#" class="text-decoration-none text-dark" 
                                                    onclick="showPersonalShift(<?= $staff['id'] ?>)">
-                                                    <?= h($staff['name']) ?>
+                                                    <?= $overlapIcon ?><?= h($staff['name']) ?>
                                                 </a>
                                             </div>
                                             <div class="d-flex gap-1 mt-1">
@@ -415,6 +614,9 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
                                                 <span class="badge bg-secondary">その他</span>
                                                 <?php endif; ?>
                                                 <span class="badge bg-success"><?= $staff['gender'] === 'M' ? '♂' : '♀' ?></span>
+                                                <?php if ($staff['available_start_time'] && $staff['available_end_time']): ?>
+                                                <span class="badge bg-dark"><?= substr($staff['available_start_time'], 0, 5) ?>-<?= substr($staff['available_end_time'], 0, 5) ?></span>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                     </div>
@@ -481,8 +683,36 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
                             <h6 class="text-warning mb-2">⚠️ 出勤可能だが未割当 (<?= count($unassignedStaff) ?>名)</h6>
                             <div class="row g-3">
                                 <?php foreach ($unassignedStaff as $index => $staff): ?>
+                                <?php
+                                    // 🆕 時間重複に基づく色とアイコンの設定
+                                    $overlapClass = '';
+                                    $overlapIcon = '';
+                                    
+                                    if (isset($staff['overlap_info'])) {
+                                        switch ($staff['overlap_info']['type']) {
+                                            case 'complete':
+                                                $overlapClass = 'border-success bg-light-success';
+                                                $overlapIcon = '<i class="fas fa-check-circle text-success me-1" title="完全重複：宴会時間を完全にカバー"></i>';
+                                                break;
+                                            case 'partial':
+                                                $overlapClass = 'border-info bg-light-info';
+                                                $overlapIcon = '<i class="fas fa-info-circle text-info me-1" title="一部重複：宴会時間と一部重複"></i>';
+                                                break;
+                                            case 'none':
+                                                $overlapClass = 'border-warning bg-light-warning';
+                                                $overlapIcon = '<i class="fas fa-exclamation-triangle text-warning me-1" title="重複なし：時間調整が必要"></i>';
+                                                break;
+                                            default:
+                                                $overlapClass = 'border-warning bg-warning bg-opacity-10';
+                                                $overlapIcon = '<i class="fas fa-question-circle text-warning me-1" title="時間情報不明"></i>';
+                                        }
+                                    } else {
+                                        $overlapClass = 'border-warning bg-warning bg-opacity-10';
+                                        $overlapIcon = '';
+                                    }
+                                ?>
                                 <div class="col-md-6">
-                                    <div class="d-flex align-items-center p-2 bg-warning bg-opacity-10 border border-warning rounded">
+                                    <div class="d-flex align-items-center p-2 <?= $overlapClass ?> rounded">
                                         <div class="me-3">
                                             <div class="bg-warning text-dark rounded-circle d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-size: 14px; font-weight: bold;">
                                                 <?= $index + 1 ?>
@@ -492,7 +722,7 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
                                             <div class="fw-bold text-dark">
                                                 <a href="#" class="text-decoration-none text-dark" 
                                                    onclick="showPersonalShift(<?= $staff['id'] ?>)">
-                                                    <?= h($staff['name']) ?>
+                                                    <?= $overlapIcon ?><?= h($staff['name']) ?>
                                                 </a>
                                             </div>
                                             <div class="d-flex gap-1 mt-1">
@@ -514,23 +744,90 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
                         </div>
                         <?php endif; ?>
                     </div>
+                    <div class="card-footer bg-light">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="text-muted small">
+                                <strong>保存日時:</strong><br>
+                                <?= date('Y/m/d H:i', strtotime($shift['shift_created_at'])) ?>
+                            </div>
+                            <div>
+                                <button type="button" class="btn btn-outline-success btn-sm me-2" 
+                                        onclick="toggleEditMode(<?= $shift['id'] ?>)">
+                                    <i class="fas fa-edit me-1"></i>クイック編集
+                                </button>
+                                <a href="shift_assignment.php?event_id=<?= $shift['id'] ?>" class="btn btn-outline-primary btn-sm me-2">
+                                    <i class="fas fa-external-link-alt me-1"></i>詳細編集
+                                </a>
+                                <form method="POST" class="d-inline" 
+                                      onsubmit="return confirm('このシフトを削除しますか？\n\nこの操作は取り消せません。')">
+                                    <input type="hidden" name="action" value="delete_shift">
+                                    <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">
+                                        <i class="fas fa-trash-alt me-1"></i>削除
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                         
-                        <div class="text-muted small">
-                            <strong>保存日時:</strong><br>
-                            <?= date('Y/m/d H:i', strtotime($shift['shift_created_at'])) ?>
-                    </div>
-                    <div class="card-footer bg-light text-end">
-                        <a href="shift_assignment.php?event_id=<?= $shift['id'] ?>" class="btn btn-outline-primary me-2">
-                            <i class="fas fa-edit me-1"></i>編集
-                        </a>
-                        <form method="POST" class="d-inline" 
-                              onsubmit="return confirm('このシフトを削除しますか？\n\nこの操作は取り消せません。')">
-                            <input type="hidden" name="action" value="delete_shift">
-                            <input type="hidden" name="event_id" value="<?= $shift['id'] ?>">
-                            <button type="submit" class="btn btn-outline-danger">
-                                <i class="fas fa-trash-alt me-1"></i>削除
-                            </button>
-                        </form>
+                        <!-- 🆕 インライン編集エリア -->
+                        <div id="editArea_<?= $shift['id'] ?>" class="mt-3" style="display: none;">
+                            <div class="border-top pt-3">
+                                <h6 class="text-primary mb-3">✏️ スタッフ割当編集</h6>
+                                
+                                <!-- 現在の割当スタッフ -->
+                                <div class="mb-3">
+                                    <h6 class="text-success mb-2">現在の割当スタッフ</h6>
+                                    <div id="currentAssigned_<?= $shift['id'] ?>" class="row g-2">
+                                        <?php foreach ($assignedStaff as $staff): ?>
+                                        <div class="col-md-6">
+                                            <div class="d-flex align-items-center justify-content-between p-2 bg-success bg-opacity-10 border border-success rounded">
+                                                <span><?= h($staff['name']) ?> (<?= h($staff['assigned_role']) ?>)</span>
+                                                <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                        onclick="removeStaffFromShift(<?= $shift['id'] ?>, <?= $staff['id'] ?>, '<?= h($staff['name']) ?>')">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                                
+                                <!-- 追加可能スタッフ -->
+                                <?php if (!empty($unassignedStaff)): ?>
+                                <div class="mb-3">
+                                    <h6 class="text-warning mb-2">追加可能スタッフ</h6>
+                                    <div id="availableStaff_<?= $shift['id'] ?>" class="row g-2">
+                                        <?php foreach ($unassignedStaff as $staff): ?>
+                                        <div class="col-md-6">
+                                            <div class="d-flex align-items-center justify-content-between p-2 bg-warning bg-opacity-10 border border-warning rounded">
+                                                <span><?= h($staff['name']) ?> 
+                                                    <?php if ($staff['available_start_time'] && $staff['available_end_time']): ?>
+                                                    <small class="text-muted">(<?= substr($staff['available_start_time'], 0, 5) ?>-<?= substr($staff['available_end_time'], 0, 5) ?>)</small>
+                                                    <?php endif; ?>
+                                                </span>
+                                                <button type="button" class="btn btn-sm btn-outline-success" 
+                                                        onclick="addStaffToShift(<?= $shift['id'] ?>, <?= $staff['id'] ?>, '<?= h($staff['name']) ?>')">
+                                                    <i class="fas fa-plus"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+                                
+                                <div class="text-end">
+                                    <button type="button" class="btn btn-secondary btn-sm me-2" 
+                                            onclick="toggleEditMode(<?= $shift['id'] ?>)">
+                                        キャンセル
+                                    </button>
+                                    <button type="button" class="btn btn-success btn-sm" 
+                                            onclick="saveShiftChanges(<?= $shift['id'] ?>)">
+                                        変更を保存
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -878,6 +1175,82 @@ function calculateWeddingShortage($pdo, $eventId, $shift) {
             `;
             
             content.innerHTML = html;
+        }
+        
+        // 🆕 編集モードの切り替え
+        function toggleEditMode(eventId) {
+            const editArea = document.getElementById(`editArea_${eventId}`);
+            if (editArea.style.display === 'none') {
+                editArea.style.display = 'block';
+            } else {
+                editArea.style.display = 'none';
+            }
+        }
+        
+        // 🆕 スタッフをシフトに追加
+        function addStaffToShift(eventId, userId, userName) {
+            if (!confirm(`${userName}をシフトに追加しますか？`)) {
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('action', 'add_staff');
+            formData.append('event_id', eventId);
+            formData.append('user_id', userId);
+            
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    window.location.reload(); // ページを更新して変更を反映
+                } else {
+                    alert('エラー: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('通信エラーが発生しました');
+            });
+        }
+        
+        // 🆕 スタッフをシフトから削除
+        function removeStaffFromShift(eventId, userId, userName) {
+            if (!confirm(`${userName}をシフトから削除しますか？`)) {
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('action', 'remove_staff');
+            formData.append('event_id', eventId);
+            formData.append('user_id', userId);
+            
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    window.location.reload(); // ページを更新して変更を反映
+                } else {
+                    alert('エラー: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('通信エラーが発生しました');
+            });
+        }
+        
+        // 🆕 シフト変更を保存
+        function saveShiftChanges(eventId) {
+            alert('変更が保存されました');
+            toggleEditMode(eventId);
         }
     </script>
 </body>

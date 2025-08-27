@@ -329,6 +329,31 @@ function calculateShortageStats($assignments, $event) {
             .no-print { display: none !important; }
             .print-title { font-size: 1.5rem; margin-bottom: 1rem; }
         }
+        
+        /* 🆕 時間重複表示用のスタイル */
+        .bg-light-success {
+            background-color: rgba(25, 135, 84, 0.1) !important;
+        }
+        
+        .bg-light-info {
+            background-color: rgba(13, 202, 240, 0.1) !important;
+        }
+        
+        .bg-light-warning {
+            background-color: rgba(255, 193, 7, 0.1) !important;
+        }
+        
+        .border-success {
+            border-color: #198754 !important;
+        }
+        
+        .border-info {
+            border-color: #0dcaf0 !important;
+        }
+        
+        .border-warning {
+            border-color: #ffc107 !important;
+        }
     </style>
 </head>
 <body>
@@ -442,10 +467,16 @@ function calculateShortageStats($assignments, $event) {
                         <!-- シフト作成ボタンエリア -->
                         <div class="mt-3">
                             <!-- ランダム選択ボタン -->
-                            <button type="button" class="btn btn-primary w-100" id="randomSelectBtn" onclick="randomSelectStaff()" disabled>
+                            <button type="button" class="btn btn-primary w-100 mb-2" id="randomSelectBtn" onclick="randomSelectStaff()" disabled>
                                 🎲 ランダム選択
                             </button>
-                            <small class="text-muted d-block mt-1">※出勤可能スタッフからランダムで選択</small>
+                            <small class="text-muted d-block mb-3">※出勤可能スタッフからランダムで選択</small>
+                            
+                            <!-- 手動選択ボタン -->
+                            <button type="button" class="btn btn-success w-100" id="manualSelectBtn" onclick="manualSelectStaff()" disabled>
+                                ✅ 選択したスタッフでシフト作成
+                            </button>
+                            <small class="text-muted d-block mt-1">※チェックしたスタッフでシフトを作成</small>
                         </div>
                         
                         <?php if ($hasSavedShift && !$assignmentResult): ?>
@@ -878,10 +909,33 @@ function calculateShortageStats($assignments, $event) {
                     <div class="card-header">
                         <div class="d-flex justify-content-between align-items-center">
                             <h6 class="mb-0">👥 出勤可能スタッフ (${data.stats.total_available}名) - ${eventDate}</h6>
-                            <small class="text-muted">♂${data.stats.male_count} ♀${data.stats.female_count}</small>
+                            <div class="d-flex align-items-center gap-2">
+                                <small class="text-muted">♂${data.stats.male_count} ♀${data.stats.female_count}</small>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="selectAllStaff()">全選択</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="deselectAllStaff()">全解除</button>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body p-3">
+                        <div class="mb-3">
+                            <div class="d-flex align-items-center gap-3 small">
+                                <div class="text-muted">宴会時間: ${data.event.start_time ? data.event.start_time.substr(0, 5) : '未設定'} - ${data.event.end_time ? data.event.end_time.substr(0, 5) : '未設定'}</div>
+                                <div class="d-flex align-items-center gap-3">
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-check-circle text-success me-1"></i>
+                                        <span class="small">完全重複</span>
+                                    </div>
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-info-circle text-info me-1"></i>
+                                        <span class="small">一部重複</span>
+                                    </div>
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-exclamation-triangle text-warning me-1"></i>
+                                        <span class="small">重複なし</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
             `;
             
             // ランナー表示
@@ -899,13 +953,44 @@ function calculateShortageStats($assignments, $event) {
                     const timeDisplay = staff.available_start_time && staff.available_end_time ?
                         `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
                     
+                    // 🆕 宴会時間との重複チェック（3段階）
+                    let overlapClass = '';
+                    let overlapIcon = '';
+                    if (data.event.start_time && data.event.end_time && 
+                        staff.available_start_time && staff.available_end_time) {
+                        const overlapResult = checkTimeOverlap(
+                            data.event.start_time, data.event.end_time,
+                            staff.available_start_time, staff.available_end_time
+                        );
+                        
+                        if (overlapResult.type === 'complete') {
+                            // 完全重複（出勤時間が宴会時間を完全にカバー）
+                            overlapClass = 'border-success bg-light-success';
+                            overlapIcon = '<i class="fas fa-check-circle text-success me-1" title="完全重複：宴会時間を完全にカバー"></i>';
+                        } else if (overlapResult.type === 'partial') {
+                            // 一部重複
+                            overlapClass = 'border-info bg-light-info';
+                            overlapIcon = '<i class="fas fa-info-circle text-info me-1" title="一部重複：宴会時間と一部重複"></i>';
+                        } else {
+                            // 重複なし
+                            overlapClass = 'border-warning bg-light-warning';
+                            overlapIcon = '<i class="fas fa-exclamation-triangle text-warning me-1" title="重複なし：時間調整が必要"></i>';
+                        }
+                    }
+                    
                     html += `
                         <div class="col-md-6">
-                            <div class="border rounded p-2">
+                            <div class="border rounded p-2 ${overlapClass}">
                                 <div class="d-flex justify-content-between align-items-start">
-                                    <div>
-                                        <div class="fw-bold small">${staff.name}</div>
-                                        <div class="text-muted" style="font-size: 0.75rem;">${timeDisplay}</div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex align-items-center">
+                                            <input type="checkbox" class="form-check-input me-2 staff-checkbox" 
+                                                   value="${staff.id}" data-name="${staff.name}" data-category="runner">
+                                            <div>
+                                                <div class="fw-bold small">${overlapIcon}${staff.name}</div>
+                                                <div class="text-muted" style="font-size: 0.75rem;">${timeDisplay}</div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <span class="badge bg-light text-dark">${genderBadge}</span>
                                 </div>
@@ -932,13 +1017,44 @@ function calculateShortageStats($assignments, $event) {
                     const timeDisplay = staff.available_start_time && staff.available_end_time ?
                         `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
                     
+                    // 🆕 宴会時間との重複チェック（3段階）
+                    let overlapClass = '';
+                    let overlapIcon = '';
+                    if (data.event.start_time && data.event.end_time && 
+                        staff.available_start_time && staff.available_end_time) {
+                        const overlapResult = checkTimeOverlap(
+                            data.event.start_time, data.event.end_time,
+                            staff.available_start_time, staff.available_end_time
+                        );
+                        
+                        if (overlapResult.type === 'complete') {
+                            // 完全重複（出勤時間が宴会時間を完全にカバー）
+                            overlapClass = 'border-success bg-light-success';
+                            overlapIcon = '<i class="fas fa-check-circle text-success me-1" title="完全重複：宴会時間を完全にカバー"></i>';
+                        } else if (overlapResult.type === 'partial') {
+                            // 一部重複
+                            overlapClass = 'border-info bg-light-info';
+                            overlapIcon = '<i class="fas fa-info-circle text-info me-1" title="一部重複：宴会時間と一部重複"></i>';
+                        } else {
+                            // 重複なし
+                            overlapClass = 'border-warning bg-light-warning';
+                            overlapIcon = '<i class="fas fa-exclamation-triangle text-warning me-1" title="重複なし：時間調整が必要"></i>';
+                        }
+                    }
+                    
                     html += `
                         <div class="col-md-6">
-                            <div class="border rounded p-2">
+                            <div class="border rounded p-2 ${overlapClass}">
                                 <div class="d-flex justify-content-between align-items-start">
-                                    <div>
-                                        <div class="fw-bold small">${staff.name}</div>
-                                        <div class="text-muted" style="font-size: 0.75rem;">${timeDisplay}</div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex align-items-center">
+                                            <input type="checkbox" class="form-check-input me-2 staff-checkbox" 
+                                                   value="${staff.id}" data-name="${staff.name}" data-category="other">
+                                            <div>
+                                                <div class="fw-bold small">${overlapIcon}${staff.name}</div>
+                                                <div class="text-muted" style="font-size: 0.75rem;">${timeDisplay}</div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <span class="badge bg-light text-dark">${genderBadge}</span>
                                 </div>
@@ -995,11 +1111,23 @@ function calculateShortageStats($assignments, $event) {
             html += '</div>';
             staffArea.innerHTML = html;
             
-            // 🆕 ランダム選択ボタンを有効化
+            // 🆕 ボタンを有効化し、チェックボックスイベントを設定
             const randomBtn = document.getElementById('randomSelectBtn');
+            const manualBtn = document.getElementById('manualSelectBtn');
             if (randomBtn) {
                 randomBtn.disabled = false;
             }
+            if (manualBtn) {
+                manualBtn.disabled = true; // 初期状態では無効
+            }
+            
+            // チェックボックスの変更イベントを設定
+            updateManualSelectionState();
+            document.addEventListener('change', function(e) {
+                if (e.target.classList.contains('staff-checkbox')) {
+                    updateManualSelectionState();
+                }
+            });
         }
         
         function showStaffError(message) {
@@ -1029,6 +1157,47 @@ function calculateShortageStats($assignments, $event) {
         // 🆕 グローバル変数として出勤可能スタッフデータを保存
         let currentAvailableStaff = [];
         
+        // 🆕 時間重複チェック関数（重複の種類も判定）
+        function checkTimeOverlap(eventStart, eventEnd, availableStart, availableEnd) {
+            // 時間文字列をDateオブジェクトに変換（同じ日付で比較）
+            const baseDate = '2024-01-01 ';
+            const eventStartTime = new Date(baseDate + eventStart);
+            const eventEndTime = new Date(baseDate + eventEnd);
+            const availableStartTime = new Date(baseDate + availableStart);
+            const availableEndTime = new Date(baseDate + availableEnd);
+            
+            // 重複なし
+            if (eventEndTime <= availableStartTime || eventStartTime >= availableEndTime) {
+                return { hasOverlap: false, type: 'none' };
+            }
+            
+            // 完全に含む（出勤時間が宴会時間を完全にカバー）
+            if (availableStartTime <= eventStartTime && availableEndTime >= eventEndTime) {
+                return { hasOverlap: true, type: 'complete' };
+            }
+            
+            // 一部重複
+            return { hasOverlap: true, type: 'partial' };
+        }
+        
+        // 🆕 宴会時間と重複するスタッフをフィルタリング
+        function filterStaffByEventTime(staff, eventStartTime, eventEndTime) {
+            return staff.filter(person => {
+                if (!person.available_start_time || !person.available_end_time) {
+                    return false; // 時間情報がない場合は除外
+                }
+                
+                const overlapResult = checkTimeOverlap(
+                    eventStartTime,
+                    eventEndTime,
+                    person.available_start_time,
+                    person.available_end_time
+                );
+                
+                return overlapResult.hasOverlap;
+            });
+        }
+        
         // 🆕 ランダム選択機能
         function randomSelectStaff() {
             if (currentAvailableStaff.length === 0) {
@@ -1055,20 +1224,44 @@ function calculateShortageStats($assignments, $event) {
                 }
             }
             
-            const runnerCount = currentAvailableStaff.filter(s => s.is_rank === 'ランナー').length;
+            // 🆕 宴会時間と重複するスタッフのみに絞り込み
+            let timeFilteredStaff = currentAvailableStaff;
+            let excludedByTime = 0;
             
-            // コースランナーとビュッフェランナーの数を計算
-            const courseRunners = currentAvailableStaff.filter(s => 
+            if (selectedEvent && selectedEvent.start_time && selectedEvent.end_time) {
+                const originalCount = currentAvailableStaff.length;
+                timeFilteredStaff = filterStaffByEventTime(
+                    currentAvailableStaff, 
+                    selectedEvent.start_time, 
+                    selectedEvent.end_time
+                );
+                excludedByTime = originalCount - timeFilteredStaff.length;
+                
+                console.log('時間フィルタリング結果:');
+                console.log('- 宴会時間:', selectedEvent.start_time + ' - ' + selectedEvent.end_time);
+                console.log('- 元の候補者数:', originalCount);
+                console.log('- 時間除外者数:', excludedByTime);
+                console.log('- フィルタ後候補者数:', timeFilteredStaff.length);
+            }
+            
+            const runnerCount = timeFilteredStaff.filter(s => s.is_rank === 'ランナー').length;
+            
+            // コースランナーとビュッフェランナーの数を計算（時間フィルタ後）
+            const courseRunners = timeFilteredStaff.filter(s => 
                 s.is_rank === 'ランナー' && 
                 s.skills.some(skill => skill.task_name === 'コースランナー')
             ).length;
-            const buffetRunners = currentAvailableStaff.filter(s => 
+            const buffetRunners = timeFilteredStaff.filter(s => 
                 s.is_rank === 'ランナー' && 
                 s.skills.some(skill => skill.task_name === 'ビュッフェランナー')
             ).length;
             
             // その他（ランナー以外）の数を正確に計算
-            const nonRunnerCount = currentAvailableStaff.filter(s => s.is_rank !== 'ランナー').length;
+            // 🆕 改善: その他にはランナーも含めるが、選択されているランナーは除外
+            const allStaff = timeFilteredStaff.length;
+            
+            // その他の候補数は全スタッフ数（実際の選択時に動的に調整）
+            const otherCandidatesCount = allStaff;
             
             // イベント種別に応じてランナーカテゴリを制限
             let showCourseRunner = true;
@@ -1092,7 +1285,7 @@ function calculateShortageStats($assignments, $event) {
             // デフォルト値の計算（イベント種別に応じて調整）
             let defaultCourseRunner = 0;
             let defaultBuffetRunner = 0;
-            let defaultNonRunner = Math.min(Math.ceil(defaultStaffCount * 0.4), nonRunnerCount);
+            let defaultOther = Math.min(Math.ceil(defaultStaffCount * 0.4), otherCandidatesCount);
             
             if (showCourseRunner && showBuffetRunner) {
                 // 両方表示する場合（その他のイベント種別）
@@ -1116,6 +1309,14 @@ function calculateShortageStats($assignments, $event) {
                             </div>
                             <div class="modal-body">
                                 ${categoryMessage}
+                                
+                                ${excludedByTime > 0 ? `
+                                <div class="alert alert-warning">
+                                    <i class="fas fa-clock"></i> <strong>時間フィルタリング</strong><br>
+                                    宴会時間 (${selectedEvent.start_time.substr(0,5)} - ${selectedEvent.end_time.substr(0,5)}) と重複しないため、
+                                    ${excludedByTime}名が候補から除外されました。
+                                </div>
+                                ` : ''}
                                 
                                 <div id="categorySelection">
                                     <div class="row">
@@ -1141,10 +1342,15 @@ function calculateShortageStats($assignments, $event) {
                                         ` : ''}
                                         <div class="col-lg-4 col-md-12">
                                             <div class="mb-3">
-                                                <label for="nonRunnerCount" class="form-label">
-                                                    <i class="fas fa-users text-success"></i> その他
+                                                <label for="otherCount" class="form-label">
+                                                    <i class="fas fa-users text-success"></i> その他 <small class="text-muted">(全スタッフ)</small>
                                                 </label>
-                                                <input type="number" class="form-control" id="nonRunnerCount" min="0" max="${nonRunnerCount}" value="${defaultNonRunner}">
+                                                <input type="number" class="form-control" id="otherCount" min="0" max="${otherCandidatesCount}" value="${defaultOther}">
+                                                <small class="form-text text-muted">
+                                                    選択済みランナーを除く全スタッフから選択<br>
+                                                    <span class="text-info">候補: ${allStaff}名 (ランナー ${runnerCount}名含む)</span>
+                                                    ${excludedByTime > 0 ? `<br><span class="text-warning">時間除外: ${excludedByTime}名</span>` : ''}
+                                                </small>
                                             </div>
                                         </div>
                                     </div>
@@ -1186,50 +1392,90 @@ function calculateShortageStats($assignments, $event) {
             // フィールドが存在する場合のみ値を取得、存在しない場合は0
             const courseRunnerCountEl = document.getElementById('courseRunnerCount');
             const buffetRunnerCountEl = document.getElementById('buffetRunnerCount');
-            const nonRunnerCountEl = document.getElementById('nonRunnerCount');
+            const otherCountEl = document.getElementById('otherCount');
             
             const courseRunnerCount = courseRunnerCountEl ? parseInt(courseRunnerCountEl.value) || 0 : 0;
             const buffetRunnerCount = buffetRunnerCountEl ? parseInt(buffetRunnerCountEl.value) || 0 : 0;
-            const nonRunnerCount = nonRunnerCountEl ? parseInt(nonRunnerCountEl.value) || 0 : 0;
+            const otherCount = otherCountEl ? parseInt(otherCountEl.value) || 0 : 0;
             
-            if (courseRunnerCount + buffetRunnerCount + nonRunnerCount === 0) {
+            if (courseRunnerCount + buffetRunnerCount + otherCount === 0) {
                 alert('最低1名は選択してください');
                 return;
             }
             
-            // 各カテゴリのスタッフを分類
-            const courseRunners = currentAvailableStaff.filter(s => 
+            // 🆕 時間フィルタリングを適用
+            const eventSelect = document.getElementById('event_id');
+            let timeFilteredStaff = currentAvailableStaff;
+            
+            if (eventSelect && eventSelect.value) {
+                const selectedEvent = eventsData.find(e => e.id == eventSelect.value);
+                if (selectedEvent && selectedEvent.start_time && selectedEvent.end_time) {
+                    timeFilteredStaff = filterStaffByEventTime(
+                        currentAvailableStaff, 
+                        selectedEvent.start_time, 
+                        selectedEvent.end_time
+                    );
+                }
+            }
+            
+            // 各カテゴリのスタッフを分類（時間フィルタリング後）
+            const courseRunners = timeFilteredStaff.filter(s => 
                 s.is_rank === 'ランナー' && 
                 s.skills.some(skill => skill.task_name === 'コースランナー')
             );
-            const buffetRunners = currentAvailableStaff.filter(s => 
+            const buffetRunners = timeFilteredStaff.filter(s => 
                 s.is_rank === 'ランナー' && 
                 s.skills.some(skill => skill.task_name === 'ビュッフェランナー')
             );
-            const nonRunners = currentAvailableStaff.filter(s => s.is_rank !== 'ランナー');
+            
+            // 🆕 改善: その他は全スタッフから選択済みランナーを除外
+            let selectedRunners = [];
+            
+            // まずランナーを選択
+            if (balanceGender) {
+                selectedRunners = [
+                    ...selectWithGenderBalance(courseRunners, Math.min(courseRunnerCount, courseRunners.length)).map(s => ({...s, selectionCategory: 'courseRunner'})),
+                    ...selectWithGenderBalance(buffetRunners, Math.min(buffetRunnerCount, buffetRunners.length)).map(s => ({...s, selectionCategory: 'buffetRunner'}))
+                ];
+            } else {
+                selectedRunners = [
+                    ...courseRunners.sort(() => 0.5 - Math.random()).slice(0, Math.min(courseRunnerCount, courseRunners.length)).map(s => ({...s, selectionCategory: 'courseRunner'})),
+                    ...buffetRunners.sort(() => 0.5 - Math.random()).slice(0, Math.min(buffetRunnerCount, buffetRunners.length)).map(s => ({...s, selectionCategory: 'buffetRunner'}))
+                ];
+            }
+            
+            // その他の候補から選択済みランナーを除外（時間フィルタリング後）
+            const otherCandidates = timeFilteredStaff.filter(s => 
+                !selectedRunners.some(selected => selected.id === s.id)
+            );
+            
+            // デバッグ情報をコンソールに出力
+            console.log('ランダム選択デバッグ情報:');
+            console.log('全スタッフ数:', currentAvailableStaff.length);
+            console.log('時間フィルタリング後スタッフ数:', timeFilteredStaff.length);
+            console.log('選択されたランナー数:', selectedRunners.length);
+            console.log('その他候補数:', otherCandidates.length);
+            console.log('その他候補内のランナー数:', otherCandidates.filter(s => s.is_rank === 'ランナー').length);
             
             // 選択可能数のチェックと不足人数の計算
             let shortageMessages = [];
-            let actualCourseRunnerCount = courseRunnerCount;
-            let actualBuffetRunnerCount = buffetRunnerCount;
-            let actualNonRunnerCount = nonRunnerCount;
+            let actualCourseRunnerCount = Math.min(courseRunnerCount, courseRunners.length);
+            let actualBuffetRunnerCount = Math.min(buffetRunnerCount, buffetRunners.length);
+            let actualOtherCount = Math.min(otherCount, otherCandidates.length);
             
             if (courseRunnerCount > courseRunners.length) {
                 const shortage = courseRunnerCount - courseRunners.length;
                 shortageMessages.push(`コースランナー: ${shortage}名不足（${courseRunners.length}名のみ選択）`);
-                actualCourseRunnerCount = courseRunners.length;
             }
             
             if (buffetRunnerCount > buffetRunners.length) {
                 const shortage = buffetRunnerCount - buffetRunners.length;
                 shortageMessages.push(`ビュッフェランナー: ${shortage}名不足（${buffetRunners.length}名のみ選択）`);
-                actualBuffetRunnerCount = buffetRunners.length;
             }
             
-            if (nonRunnerCount > nonRunners.length) {
-                const shortage = nonRunnerCount - nonRunners.length;
-                shortageMessages.push(`その他: ${shortage}名不足（${nonRunners.length}名のみ選択）`);
-                actualNonRunnerCount = nonRunners.length;
+            if (otherCount > otherCandidates.length) {
+                const shortage = otherCount - otherCandidates.length;
+                shortageMessages.push(`その他: ${shortage}名不足（${otherCandidates.length}名のみ選択）`);
             }
             
             // 不足がある場合は警告メッセージを表示
@@ -1240,29 +1486,31 @@ function calculateShortageStats($assignments, $event) {
                 }
             }
             
-            let selectedStaff = [];
-            
-            // 性別バランスを考慮するかどうか
+            // その他の候補から選択
+            let selectedOthers = [];
             if (balanceGender) {
-                selectedStaff = [
-                    ...selectWithGenderBalance(courseRunners, actualCourseRunnerCount),
-                    ...selectWithGenderBalance(buffetRunners, actualBuffetRunnerCount),
-                    ...selectWithGenderBalance(nonRunners, actualNonRunnerCount)
-                ];
+                selectedOthers = selectWithGenderBalance(otherCandidates, actualOtherCount).map(s => ({...s, selectionCategory: 'other'}));
             } else {
-                selectedStaff = [
-                    ...courseRunners.sort(() => 0.5 - Math.random()).slice(0, actualCourseRunnerCount),
-                    ...buffetRunners.sort(() => 0.5 - Math.random()).slice(0, actualBuffetRunnerCount),
-                    ...nonRunners.sort(() => 0.5 - Math.random()).slice(0, actualNonRunnerCount)
-                ];
+                selectedOthers = otherCandidates.sort(() => 0.5 - Math.random()).slice(0, actualOtherCount).map(s => ({...s, selectionCategory: 'other'}));
             }
+            
+            // 最終的な選択結果
+            const selectedStaff = [...selectedRunners, ...selectedOthers];
             
             // モーダルを閉じる
             const modal = bootstrap.Modal.getInstance(document.getElementById('randomSelectionModal'));
             modal.hide();
             
             // 結果を表示（不足メッセージも含む）
-            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length, shortageMessages);
+            const selectionDetails = {
+                totalAvailable: currentAvailableStaff.length,
+                timeFiltered: timeFilteredStaff.length,
+                selectedRunners: selectedRunners.length,
+                selectedOthers: selectedOthers.length,
+                otherCandidates: otherCandidates.length,
+                runnersInOthers: selectedOthers.filter(s => s.is_rank === 'ランナー').length
+            };
+            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length, shortageMessages, selectionDetails);
         }
         
         function selectWithGenderBalance(staff, count) {
@@ -1288,7 +1536,7 @@ function calculateShortageStats($assignments, $event) {
             return selected.sort(() => 0.5 - Math.random());
         }
         
-        function showRandomSelectionResult(selectedStaff, totalCount, shortageMessages = []) {
+        function showRandomSelectionResult(selectedStaff, totalCount, shortageMessages = [], selectionDetails = null) {
             // 🆕 選択されたスタッフデータをグローバル変数に保存
             currentSelectedStaff = selectedStaff;
             
@@ -1307,16 +1555,64 @@ function calculateShortageStats($assignments, $event) {
                 `;
             }
             
+            // 選択詳細情報の表示
+            let detailsInfo = '';
+            if (selectionDetails) {
+                if (selectionDetails.manualSelection) {
+                    // 手動選択の場合
+                    detailsInfo = `
+                        <div class="alert alert-success">
+                            <i class="fas fa-hand-pointer"></i> <strong>手動選択</strong><br>
+                            • 利用可能スタッフ: ${selectionDetails.totalAvailable}名<br>
+                            • 手動選択: ${selectionDetails.selectedStaff}名
+                        </div>
+                    `;
+                } else if (selectionDetails.editedSelection) {
+                    // 編集済み選択の場合
+                    detailsInfo = `
+                        <div class="alert alert-warning">
+                            <i class="fas fa-edit"></i> <strong>編集済み選択</strong><br>
+                            • 利用可能スタッフ: ${selectionDetails.totalAvailable}名<br>
+                            • 編集後の選択: ${selectionDetails.selectedStaff}名
+                        </div>
+                    `;
+                } else {
+                    // ランダム選択の場合
+                    detailsInfo = `
+                        <div class="alert alert-info">
+                            <i class="fas fa-dice"></i> <strong>ランダム選択詳細</strong><br>
+                            • 利用可能スタッフ: ${selectionDetails.totalAvailable}名<br>
+                            • ランナー枠で選択: ${selectionDetails.selectedRunners}名<br>
+                            • その他枠で選択: ${selectionDetails.selectedOthers}名 (うちランナー ${selectionDetails.runnersInOthers}名)<br>
+                            • その他候補者数: ${selectionDetails.otherCandidates}名
+                        </div>
+                    `;
+                }
+            }
+            
             // 各カテゴリに分ける
-            const courseRunners = selectedStaff.filter(staff => 
-                staff.is_rank === 'ランナー' && 
-                staff.skills.some(skill => skill.task_name === 'コースランナー')
-            );
-            const buffetRunners = selectedStaff.filter(staff => 
-                staff.is_rank === 'ランナー' && 
-                staff.skills.some(skill => skill.task_name === 'ビュッフェランナー')
-            );
-            const nonRunners = selectedStaff.filter(staff => staff.is_rank !== 'ランナー');
+            let courseRunners, buffetRunners, othersSelected;
+            
+            if (selectionDetails && (selectionDetails.manualSelection || selectionDetails.editedSelection)) {
+                // 手動選択または編集済み選択の場合は、スキルに基づいてカテゴリ分け
+                courseRunners = selectedStaff.filter(staff => 
+                    staff.is_rank === 'ランナー' && 
+                    staff.skills.some(skill => skill.task_name === 'コースランナー')
+                );
+                buffetRunners = selectedStaff.filter(staff => 
+                    staff.is_rank === 'ランナー' && 
+                    staff.skills.some(skill => skill.task_name === 'ビュッフェランナー') &&
+                    !courseRunners.includes(staff) // コースランナーと重複しない
+                );
+                othersSelected = selectedStaff.filter(staff => 
+                    !courseRunners.includes(staff) && !buffetRunners.includes(staff)
+                );
+            } else {
+                // ランダム選択の場合は、選択カテゴリで判定
+                courseRunners = selectedStaff.filter(staff => staff.selectionCategory === 'courseRunner');
+                buffetRunners = selectedStaff.filter(staff => staff.selectionCategory === 'buffetRunner');
+                othersSelected = selectedStaff.filter(staff => staff.selectionCategory === 'other');
+            }
             
             // 選択されたスタッフのHTML生成
             let staffHtml = '';
@@ -1383,30 +1679,39 @@ function calculateShortageStats($assignments, $event) {
                 });
             }
             
-            // その他セクション
-            if (nonRunners.length > 0) {
+            // その他セクション（ランナー含む）
+            if (othersSelected.length > 0) {
                 staffHtml += `
                     <div class="col-12 mb-3 ${(courseRunners.length > 0 || buffetRunners.length > 0) ? 'mt-3' : ''}">
                         <h6 class="text-success">
-                            <i class="fas fa-users"></i> その他 (${nonRunners.length}名)
+                            <i class="fas fa-users"></i> その他 (${othersSelected.length}名)
+                            ${othersSelected.filter(s => s.is_rank === 'ランナー').length > 0 ? 
+                                `<small class="text-muted">- ランナー ${othersSelected.filter(s => s.is_rank === 'ランナー').length}名含む</small>` : ''}
                         </h6>
                     </div>
                 `;
                 
-                nonRunners.forEach((staff, index) => {
+                othersSelected.forEach((staff, index) => {
                     const genderBadge = staff.gender === 'M' ? '♂' : '♀';
                     const timeDisplay = staff.available_start_time && staff.available_end_time ?
                         `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
                     
+                    // ランナーかどうかで表示を変える
+                    const isRunner = staff.is_rank === 'ランナー';
+                    const badgeColor = isRunner ? 'bg-info' : 'bg-success';
+                    const borderColor = isRunner ? 'border-info' : 'border-success';
+                    const textColor = isRunner ? 'text-info' : 'text-success';
+                    const rankDisplay = isRunner ? ' (ランナー)' : '';
+                    
                     staffHtml += `
                         <div class="col-md-6 mb-2">
-                            <div class="border border-success rounded p-2 bg-light">
+                            <div class="${borderColor} rounded p-2 bg-light">
                                 <div class="d-flex justify-content-between align-items-start">
                                     <div>
-                                        <div class="fw-bold text-success">${index + 1}. ${staff.name}</div>
+                                        <div class="fw-bold ${textColor}">${index + 1}. ${staff.name}${rankDisplay}</div>
                                         <div class="text-muted small">${timeDisplay}</div>
                                     </div>
-                                    <span class="badge bg-success">${genderBadge}</span>
+                                    <span class="badge ${badgeColor}">${genderBadge}</span>
                                 </div>
                             </div>
                         </div>
@@ -1461,7 +1766,22 @@ function calculateShortageStats($assignments, $event) {
             }
             
             // 結果を表示
-            selectedStaffList.innerHTML = shortageWarning + staffHtml;
+            selectedStaffList.innerHTML = shortageWarning + detailsInfo + staffHtml;
+            
+            // 🆕 編集ボタンを追加
+            if (!selectionDetails || (!selectionDetails.manualSelection && !selectionDetails.editedSelection)) {
+                // ランダム選択の場合のみ編集ボタンを表示（編集済みでない場合）
+                const editButtonHtml = `
+                    <div class="mt-3 text-center">
+                        <button type="button" class="btn btn-outline-warning" onclick="enableEditMode()">
+                            ✏️ 選択結果を編集
+                        </button>
+                        <small class="d-block text-muted mt-1">※出勤可能スタッフから追加/削除できます</small>
+                    </div>
+                `;
+                selectedStaffList.innerHTML += editButtonHtml;
+            }
+            
             resultArea.style.display = 'block';
             
             // 結果エリアまでスクロール
@@ -1535,6 +1855,170 @@ function calculateShortageStats($assignments, $event) {
                 saveBtn.disabled = false;
                 saveBtn.innerHTML = '💾 シフト保存';
             });
+        }
+        
+        // 🆕 手動選択状態を更新する関数
+        function updateManualSelectionState() {
+            const checkboxes = document.querySelectorAll('.staff-checkbox:checked');
+            const manualBtn = document.getElementById('manualSelectBtn');
+            
+            if (manualBtn) {
+                if (window.editMode) {
+                    // 編集モード中
+                    if (checkboxes.length > 0) {
+                        manualBtn.disabled = false;
+                        manualBtn.innerHTML = `💾 編集完了（変更を保存） (${checkboxes.length}名)`;
+                    } else {
+                        manualBtn.disabled = true;
+                        manualBtn.innerHTML = '💾 編集完了（変更を保存）';
+                    }
+                } else {
+                    // 通常の手動選択モード
+                    if (checkboxes.length > 0) {
+                        manualBtn.disabled = false;
+                        manualBtn.innerHTML = `✅ 選択したスタッフでシフト作成 (${checkboxes.length}名)`;
+                    } else {
+                        manualBtn.disabled = true;
+                        manualBtn.innerHTML = '✅ 選択したスタッフでシフト作成';
+                    }
+                }
+            }
+        }
+        
+        // 🆕 手動選択でシフトを作成する関数
+        function manualSelectStaff() {
+            const checkboxes = document.querySelectorAll('.staff-checkbox:checked');
+            
+            if (checkboxes.length === 0) {
+                alert('スタッフを選択してください');
+                return;
+            }
+            
+            // 選択されたスタッフの情報を収集
+            const selectedStaff = [];
+            checkboxes.forEach(checkbox => {
+                const staffId = parseInt(checkbox.value);
+                const staffName = checkbox.getAttribute('data-name');
+                const category = checkbox.getAttribute('data-category');
+                
+                // currentAvailableStaffから詳細情報を取得
+                const staffDetails = currentAvailableStaff.find(s => s.id === staffId);
+                if (staffDetails) {
+                    selectedStaff.push({
+                        ...staffDetails,
+                        selectionCategory: category
+                    });
+                }
+            });
+            
+            console.log('手動選択されたスタッフ:', selectedStaff);
+            
+            // 選択情報を表示
+            const selectionDetails = {
+                totalAvailable: currentAvailableStaff.length,
+                selectedStaff: selectedStaff.length,
+                manualSelection: true
+            };
+            
+            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length, [], selectionDetails);
+        }
+        
+        // 🆕 全選択/全解除機能
+        function selectAllStaff() {
+            const checkboxes = document.querySelectorAll('.staff-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = true;
+            });
+            updateManualSelectionState();
+        }
+        
+        function deselectAllStaff() {
+            const checkboxes = document.querySelectorAll('.staff-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            updateManualSelectionState();
+        }
+        
+        // 🆕 編集モードを有効にする関数
+        function enableEditMode() {
+            // 現在選択されているスタッフのIDを取得
+            const selectedIds = currentSelectedStaff.map(staff => staff.id);
+            
+            // 出勤可能スタッフエリアのチェックボックスを現在の選択状態に合わせる
+            const checkboxes = document.querySelectorAll('.staff-checkbox');
+            checkboxes.forEach(checkbox => {
+                const staffId = parseInt(checkbox.value);
+                checkbox.checked = selectedIds.includes(staffId);
+            });
+            
+            // 手動選択ボタンを有効化し、表示を変更
+            const manualBtn = document.getElementById('manualSelectBtn');
+            if (manualBtn) {
+                manualBtn.disabled = false;
+                manualBtn.innerHTML = '💾 編集完了（変更を保存）';
+                manualBtn.classList.remove('btn-success');
+                manualBtn.classList.add('btn-warning');
+                manualBtn.onclick = function() { saveEditChanges(); };
+            }
+            
+            // 編集モード状態を設定
+            window.editMode = true;
+            
+            // 出勤可能スタッフエリアまでスクロール
+            const staffArea = document.getElementById('availableStaffArea');
+            if (staffArea) {
+                staffArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            
+            // 編集モードの説明を表示
+            alert('編集モードが有効になりました。\n\n出勤可能スタッフのチェックボックスで選択を変更し、\n「編集完了」ボタンで変更を保存してください。');
+            
+            updateManualSelectionState();
+        }
+        
+        // 🆕 編集変更を保存する関数
+        function saveEditChanges() {
+            const checkboxes = document.querySelectorAll('.staff-checkbox:checked');
+            
+            if (checkboxes.length === 0) {
+                alert('少なくとも1名のスタッフを選択してください');
+                return;
+            }
+            
+            // 選択されたスタッフの情報を収集
+            const selectedStaff = [];
+            checkboxes.forEach(checkbox => {
+                const staffId = parseInt(checkbox.value);
+                const staffDetails = currentAvailableStaff.find(s => s.id === staffId);
+                if (staffDetails) {
+                    selectedStaff.push({
+                        ...staffDetails,
+                        selectionCategory: 'edited' // 編集済みフラグ
+                    });
+                }
+            });
+            
+            // 編集モードを解除
+            window.editMode = false;
+            
+            // 手動選択ボタンを元に戻す
+            const manualBtn = document.getElementById('manualSelectBtn');
+            if (manualBtn) {
+                manualBtn.innerHTML = '✅ 選択したスタッフでシフト作成';
+                manualBtn.classList.remove('btn-warning');
+                manualBtn.classList.add('btn-success');
+                manualBtn.onclick = function() { manualSelectStaff(); };
+            }
+            
+            // 選択情報を表示
+            const selectionDetails = {
+                totalAvailable: currentAvailableStaff.length,
+                selectedStaff: selectedStaff.length,
+                editedSelection: true
+            };
+            
+            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length, [], selectionDetails);
         }
     </script>
 </body>
