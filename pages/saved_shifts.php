@@ -55,10 +55,17 @@ if ($_POST['action'] ?? '' === 'delete_shift') {
 // 保存済みシフト一覧取得
 $stmt = $pdo->query("
     SELECT e.*, COUNT(a.id) as assigned_count,
-           MIN(a.created_at) as shift_created_at
+           MIN(a.created_at) as shift_created_at,
+           e.total_staff_required,
+           e.course_runner_count,
+           e.buffet_runner_count,
+           e.light_count,
+           e.parents_count
     FROM events e
     JOIN assignments a ON e.id = a.event_id
-    GROUP BY e.id, e.event_date, e.start_time, e.end_time, e.event_type, e.venue, e.needs, e.description, e.created_at, e.updated_at
+    GROUP BY e.id, e.event_date, e.start_time, e.end_time, e.event_type, e.venue, e.needs, e.description, 
+             e.created_at, e.updated_at, e.total_staff_required, e.course_runner_count, 
+             e.buffet_runner_count, e.light_count, e.parents_count
     ORDER BY e.event_date DESC, e.start_time DESC
 ");
 $savedShifts = $stmt->fetchAll();
@@ -201,6 +208,103 @@ function getPersonalShiftDetail($pdo, $userId) {
         throw $e;
     }
 }
+
+// 不足情報を計算
+function calculateShiftShortage($shift) {
+    $requiredCount = (int)($shift['total_staff_required'] ?? 0);
+    $assignedCount = (int)$shift['assigned_count'];
+    
+    $result = [
+        'required' => $requiredCount,
+        'assigned' => $assignedCount,
+        'shortage' => $requiredCount - $assignedCount,
+        'status' => 'unknown',
+        'badge_class' => 'bg-secondary',
+        'text' => '情報なし'
+    ];
+    
+    if ($requiredCount > 0) {
+        if ($result['shortage'] > 0) {
+            $result['status'] = 'shortage';
+            $result['badge_class'] = 'bg-warning text-dark';
+            $result['text'] = $result['shortage'] . '名不足';
+        } elseif ($result['shortage'] === 0) {
+            $result['status'] = 'exact';
+            $result['badge_class'] = 'bg-success';
+            $result['text'] = '過不足なし';
+        } else {
+            $result['status'] = 'surplus';
+            $result['badge_class'] = 'bg-info';
+            $result['text'] = abs($result['shortage']) . '名余裕';
+        }
+    }
+    
+    return $result;
+}
+
+// 婚礼イベントの詳細不足情報を計算
+function calculateWeddingShortage($pdo, $eventId, $shift) {
+    if ($shift['event_type'] !== '婚礼') {
+        return null;
+    }
+    
+    $lightRequired = (int)($shift['light_count'] ?? 0);
+    $parentsRequired = (int)($shift['parents_count'] ?? 0);
+    
+    if ($lightRequired === 0 && $parentsRequired === 0) {
+        return null;
+    }
+    
+    // 割当されたスタッフのスキル情報を取得
+    $stmt = $pdo->prepare("
+        SELECT u.is_rank, s.skill_level, tt.name as task_name
+        FROM assignments a
+        JOIN users u ON a.user_id = u.id
+        LEFT JOIN skills s ON u.id = s.user_id
+        LEFT JOIN task_types tt ON s.task_type_id = tt.id
+        WHERE a.event_id = ?
+    ");
+    $stmt->execute([$eventId]);
+    $assignedStaff = $stmt->fetchAll();
+    
+    $lightAssigned = 0;
+    $parentsAssigned = 0;
+    
+    foreach ($assignedStaff as $staff) {
+        if ($staff['task_name'] && strpos($staff['task_name'], 'ライト') !== false) {
+            $lightAssigned++;
+        }
+        if ($staff['task_name'] && strpos($staff['task_name'], '接客') !== false || $staff['is_rank'] === 'ランナー') {
+            $parentsAssigned++;
+        }
+    }
+    
+    $details = [];
+    
+    if ($lightRequired > 0) {
+        $lightShortage = $lightRequired - $lightAssigned;
+        if ($lightShortage > 0) {
+            $details[] = "ライト要員 {$lightShortage}名不足";
+        } elseif ($lightShortage === 0) {
+            $details[] = "ライト要員 充足";
+        } else {
+            $details[] = "ライト要員 " . abs($lightShortage) . "名余裕";
+        }
+    }
+    
+    if ($parentsRequired > 0) {
+        $parentsShortage = $parentsRequired - $parentsAssigned;
+        if ($parentsShortage > 0) {
+            $details[] = "両親対応 {$parentsShortage}名不足";
+        } elseif ($parentsShortage === 0) {
+            $details[] = "両親対応 充足";
+        } else {
+            $details[] = "両親対応 " . abs($parentsShortage) . "名余裕";
+        }
+    }
+    
+    return $details;
+}
 ?>
 
 <!DOCTYPE html>
@@ -255,6 +359,8 @@ function getPersonalShiftDetail($pdo, $userId) {
                 $creationMethod = getCreationMethod($pdo, $shift['id']);
                 $assignedStaff = getAssignedStaff($pdo, $shift['id']);
                 $unassignedStaff = getUnassignedAvailableStaff($pdo, $shift['id']);
+                $shortageInfo = calculateShiftShortage($shift);
+                $weddingDetails = calculateWeddingShortage($pdo, $shift['id'], $shift);
             ?>
             <div class="col-12 mb-4">
                 <div class="card shadow-sm">
@@ -274,6 +380,7 @@ function getPersonalShiftDetail($pdo, $userId) {
                                 <div class="d-flex flex-column align-items-end gap-1">
                                     <span class="badge <?= $creationMethod['badge'] ?> fs-6"><?= $creationMethod['text'] ?></span>
                                     <span class="badge bg-primary"><?= $shift['assigned_count'] ?>名割当</span>
+                                    
                                     <?php if (count($unassignedStaff) > 0): ?>
                                     <span class="badge bg-warning text-dark"><?= count($unassignedStaff) ?>名未割当</span>
                                     <?php endif; ?>
@@ -315,6 +422,58 @@ function getPersonalShiftDetail($pdo, $userId) {
                                 <?php endforeach; ?>
                             </div>
                         </div>
+                        
+                        <!-- 不足情報表示 -->
+                        <?php if ($shortageInfo['required'] > 0): ?>
+                        <div class="mb-4">
+                            <div class="card border-<?= $shortageInfo['status'] === 'shortage' ? 'warning' : ($shortageInfo['status'] === 'exact' ? 'success' : 'info') ?>">
+                                <div class="card-body text-center py-3">
+                                    <div class="row align-items-center">
+                                        <div class="col-md-4">
+                                            <div class="h5 mb-1 text-<?= $shortageInfo['status'] === 'shortage' ? 'warning' : ($shortageInfo['status'] === 'exact' ? 'success' : 'info') ?>">
+                                                <?= $shortageInfo['required'] ?>名
+                                            </div>
+                                            <small class="text-muted">必要人数</small>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="h5 mb-1 text-primary">
+                                                <?= $shortageInfo['assigned'] ?>名
+                                            </div>
+                                            <small class="text-muted">割当済み</small>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <span class="badge <?= $shortageInfo['badge_class'] ?> fs-6 px-3 py-2">
+                                                <?= $shortageInfo['text'] ?>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- 婚礼特別要件の詳細表示 -->
+                                    <?php if ($weddingDetails): ?>
+                                    <hr class="my-3">
+                                    <div class="text-start">
+                                        <h6 class="text-info mb-2">💒 婚礼特別要件</h6>
+                                        <div class="row g-2">
+                                            <?php foreach ($weddingDetails as $detail): ?>
+                                            <div class="col-auto">
+                                                <?php 
+                                                $detailClass = 'bg-info';
+                                                if (strpos($detail, '不足') !== false) {
+                                                    $detailClass = 'bg-warning text-dark';
+                                                } elseif (strpos($detail, '充足') !== false) {
+                                                    $detailClass = 'bg-success';
+                                                }
+                                                ?>
+                                                <span class="badge <?= $detailClass ?>"><?= h($detail) ?></span>
+                                            </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                        <?php endif; ?>
                         
                         <!-- 未割当の出勤可能スタッフ -->
                         <?php if (!empty($unassignedStaff)): ?>
@@ -361,6 +520,9 @@ function getPersonalShiftDetail($pdo, $userId) {
                             <?= date('Y/m/d H:i', strtotime($shift['shift_created_at'])) ?>
                     </div>
                     <div class="card-footer bg-light text-end">
+                        <a href="shift_assignment.php?event_id=<?= $shift['id'] ?>" class="btn btn-outline-primary me-2">
+                            <i class="fas fa-edit me-1"></i>編集
+                        </a>
                         <form method="POST" class="d-inline" 
                               onsubmit="return confirm('このシフトを削除しますか？\n\nこの操作は取り消せません。')">
                             <input type="hidden" name="action" value="delete_shift">
@@ -380,21 +542,52 @@ function getPersonalShiftDetail($pdo, $userId) {
                 <div class="card-body">
                     <h6>📊 保存済みシフト統計</h6>
                     <div class="row text-center">
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <div class="stat-number"><?= count($savedShifts) ?></div>
                             <div class="stat-label">総シフト数</div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <div class="stat-number"><?= array_sum(array_column($savedShifts, 'assigned_count')) ?></div>
                             <div class="stat-label">総割当人数</div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
+                            <div class="stat-number">
+                                <?php
+                                $totalRequired = 0;
+                                $shiftsWithRequirement = 0;
+                                foreach ($savedShifts as $shift) {
+                                    if ($shift['total_staff_required'] > 0) {
+                                        $totalRequired += $shift['total_staff_required'];
+                                        $shiftsWithRequirement++;
+                                    }
+                                }
+                                echo $totalRequired;
+                                ?>
+                            </div>
+                            <div class="stat-label">総必要人数</div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="stat-number">
+                                <?php
+                                $shortageCount = 0;
+                                foreach ($savedShifts as $shift) {
+                                    $shortageInfo = calculateShiftShortage($shift);
+                                    if ($shortageInfo['shortage'] > 0) {
+                                        $shortageCount++;
+                                    }
+                                }
+                                echo $shortageCount;
+                                ?>
+                            </div>
+                            <div class="stat-label">不足シフト数</div>
+                        </div>
+                        <div class="col-md-2">
                             <div class="stat-number">
                                 <?= number_format(array_sum(array_column($savedShifts, 'assigned_count')) / max(count($savedShifts), 1), 1) ?>
                             </div>
                             <div class="stat-label">平均人数/シフト</div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <div class="stat-number">
                                 <?php
                                 $recentShifts = array_filter($savedShifts, function($shift) {
@@ -406,6 +599,47 @@ function getPersonalShiftDetail($pdo, $userId) {
                             <div class="stat-label">過去30日</div>
                         </div>
                     </div>
+                    
+                    <!-- 不足状況サマリー -->
+                    <?php if ($shiftsWithRequirement > 0): ?>
+                    <hr class="my-4">
+                    <h6 class="text-warning mb-3">⚠️ 不足状況サマリー</h6>
+                    <div class="row">
+                        <?php 
+                        $statusCounts = ['shortage' => 0, 'exact' => 0, 'surplus' => 0];
+                        foreach ($savedShifts as $shift) {
+                            $shortageInfo = calculateShiftShortage($shift);
+                            if ($shortageInfo['required'] > 0) {
+                                $statusCounts[$shortageInfo['status']]++;
+                            }
+                        }
+                        ?>
+                        <div class="col-md-4">
+                            <div class="d-flex align-items-center justify-content-center p-3 bg-warning bg-opacity-10 border border-warning rounded">
+                                <div class="text-center">
+                                    <div class="h4 text-warning mb-1"><?= $statusCounts['shortage'] ?></div>
+                                    <div class="small text-warning">不足シフト</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="d-flex align-items-center justify-content-center p-3 bg-success bg-opacity-10 border border-success rounded">
+                                <div class="text-center">
+                                    <div class="h4 text-success mb-1"><?= $statusCounts['exact'] ?></div>
+                                    <div class="small text-success">過不足なし</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="d-flex align-items-center justify-content-center p-3 bg-info bg-opacity-10 border border-info rounded">
+                                <div class="text-center">
+                                    <div class="h4 text-info mb-1"><?= $statusCounts['surplus'] ?></div>
+                                    <div class="small text-info">余裕シフト</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>

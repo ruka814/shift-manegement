@@ -133,7 +133,7 @@ if ($_GET['load_saved'] ?? '' === '1' && $selectedEventId) {
 }
 
 // イベント一覧取得
-$stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, description, needs FROM events ORDER BY event_date, start_time");
+$stmt = $pdo->query("SELECT id, event_date, start_time, end_time, event_type, description, needs, total_staff_required FROM events ORDER BY event_date, start_time");
 $events = $stmt->fetchAll();
 
 // 選択されたイベント情報取得
@@ -256,6 +256,64 @@ function getAssignmentStats($assignments) {
     
     return $stats;
 }
+
+// 不足統計計算
+function calculateShortageStats($assignments, $event) {
+    $stats = [
+        'total_shortage' => 0,
+        'details' => []
+    ];
+    
+    if (!$event) return $stats;
+    
+    $assignedCount = 0;
+    foreach ($assignments as $role => $roleAssignments) {
+        $assignedCount += count($roleAssignments);
+    }
+    
+    $requiredCount = (int)($event['total_staff_required'] ?? 0);
+    
+    // 基本的な人数不足/余剰
+    $stats['total_shortage'] = $requiredCount - $assignedCount;
+    
+    // 婚礼の場合の詳細分析
+    if ($event['event_type'] === '婚礼') {
+        $lightRequired = (int)($event['light_count'] ?? 0);
+        $parentsRequired = (int)($event['parents_count'] ?? 0);
+        
+        // ライト要員の確認（例：特定スキルを持つ人）
+        $lightAssigned = 0;
+        $parentsAssigned = 0; // 両親対応可能な人
+        
+        foreach ($assignments as $role => $roleAssignments) {
+            foreach ($roleAssignments as $assignment) {
+                $user = $assignment['user'];
+                if (strpos($assignment['skill_level'], 'ライト') !== false) {
+                    $lightAssigned++;
+                }
+                if (strpos($assignment['skill_level'], '接客') !== false || $user['is_rank'] === 'ランナー') {
+                    $parentsAssigned++;
+                }
+            }
+        }
+        
+        if ($lightRequired > 0) {
+            $lightShortage = $lightRequired - $lightAssigned;
+            if ($lightShortage > 0) {
+                $stats['details'][] = "ライト要員 {$lightShortage}名不足";
+            }
+        }
+        
+        if ($parentsRequired > 0) {
+            $parentsShortage = $parentsRequired - $parentsAssigned;
+            if ($parentsShortage > 0) {
+                $stats['details'][] = "両親対応 {$parentsShortage}名不足";
+            }
+        }
+    }
+    
+    return $stats;
+}
 ?>
 
 <!DOCTYPE html>
@@ -350,11 +408,16 @@ function getAssignmentStats($assignments) {
                         <form method="GET">
                             <div class="mb-3">
                                 <label class="form-label">イベントを選択</label>
-                                <select class="form-select" name="event_id" onchange="this.form.submit()">
+                                <select class="form-select" name="event_id" id="event_id" onchange="this.form.submit()">
                                     <option value="">選択してください</option>
                                     <?php foreach ($events as $event): ?>
-                                    <option value="<?= $event['id'] ?>" <?= $selectedEventId == $event['id'] ? 'selected' : '' ?>>
+                                    <option value="<?= $event['id'] ?>" 
+                                            data-total-staff="<?= $event['total_staff_required'] ?? 0 ?>"
+                                            <?= $selectedEventId == $event['id'] ? 'selected' : '' ?>>
                                         <?= formatDate($event['event_date']) ?> - <?= h($event['event_type']) ?>
+                                        <?php if (!empty($event['total_staff_required'])): ?>
+                                        (必要人数: <?= $event['total_staff_required'] ?>名・全体)
+                                        <?php endif; ?>
                                     </option>
                                     <?php endforeach; ?>
                                 </select>
@@ -368,6 +431,7 @@ function getAssignmentStats($assignments) {
                                 <li><strong>日時:</strong> <?= formatDate($selectedEvent['event_date']) ?></li>
                                 <li><strong>時間:</strong> <?= formatTime($selectedEvent['start_time']) ?> - <?= formatTime($selectedEvent['end_time']) ?></li>
                                 <li><strong>種別:</strong> <?= h($selectedEvent['event_type']) ?></li>
+                                <li><strong>総必要人数:</strong> <?= $selectedEvent['total_staff_required'] ? h($selectedEvent['total_staff_required']) . '名' : '未設定' ?></li>
                                 <li><strong>説明:</strong> <?= h($selectedEvent['description']) ?></li>
                             </ul>
                         </div>
@@ -469,13 +533,13 @@ function getAssignmentStats($assignments) {
                 <!-- 統計情報 -->
                 <?php $stats = getAssignmentStats($assignmentResult['assignments']); ?>
                 <div class="row mb-4 no-print">
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <div class="card text-center stat-card">
                             <div class="stat-number"><?= $stats['total_assigned'] ?></div>
                             <div class="stat-label">総割当人数</div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <div class="card text-center stat-card">
                             <div class="gender-ratio">
                                 <span class="badge bg-primary">男性: <?= $stats['male_count'] ?></span>
@@ -484,7 +548,7 @@ function getAssignmentStats($assignments) {
                             <div class="stat-label">性別比率</div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <div class="card text-center stat-card">
                             <div class="gender-ratio">
                                 <span class="badge bg-info">ランナー: <?= $stats['runner_count'] ?></span>
@@ -501,6 +565,37 @@ function getAssignmentStats($assignments) {
                             <div class="stat-label">スキル分布</div>
                         </div>
                     </div>
+                    
+                    <!-- 不足人数表示 -->
+                    <?php if (isset($selectedEvent['total_staff_required']) && $selectedEvent['total_staff_required'] > 0): ?>
+                    <div class="col-md-3">
+                        <?php 
+                        $shortageStats = calculateShortageStats($assignmentResult['assignments'], $selectedEvent);
+                        $requiredCount = (int)$selectedEvent['total_staff_required'];
+                        $assignedCount = $stats['total_assigned'];
+                        ?>
+                        <div class="card text-center stat-card">
+                            <?php if ($shortageStats['total_shortage'] > 0): ?>
+                                <div class="stat-number text-warning"><?= $shortageStats['total_shortage'] ?></div>
+                                <div class="stat-label text-warning">名不足</div>
+                                <small class="text-muted"><?= $requiredCount ?>名必要</small>
+                                <?php if ($shortageStats['details']): ?>
+                                    <?php foreach ($shortageStats['details'] as $detail): ?>
+                                        <small class="d-block text-warning"><?= $detail ?></small>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            <?php elseif ($shortageStats['total_shortage'] === 0): ?>
+                                <div class="stat-number text-success">0</div>
+                                <div class="stat-label text-success">過不足なし</div>
+                                <small class="text-muted"><?= $requiredCount ?>名完了</small>
+                            <?php else: ?>
+                                <div class="stat-number text-info">+<?= abs($shortageStats['total_shortage']) ?></div>
+                                <div class="stat-label text-info">名余裕</div>
+                                <small class="text-muted"><?= $requiredCount ?>名必要</small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                 </div>
                 
                 <!-- 割当結果 -->
@@ -692,6 +787,9 @@ function getAssignmentStats($assignments) {
     </script>
     
     <script>
+        // イベントデータをJavaScriptで利用可能にする
+        const eventsData = <?= json_encode($events) ?>;
+        
         // 🆕 出勤可能スタッフ表示機能
         document.addEventListener('DOMContentLoaded', function() {
             const eventSelect = document.querySelector('select[name="event_id"]');
@@ -853,6 +951,48 @@ function getAssignmentStats($assignments) {
             }
             
             html += '</div></div>';
+            
+            // 不足人数の計算と表示
+            const eventSelect = document.getElementById('event_id');
+            if (eventSelect && eventSelect.value) {
+                const selectedOption = eventSelect.options[eventSelect.selectedIndex];
+                const totalStaffRequired = selectedOption.getAttribute('data-total-staff');
+                
+                if (totalStaffRequired && !isNaN(totalStaffRequired) && totalStaffRequired > 0) {
+                    const requiredCount = parseInt(totalStaffRequired);
+                    const availableCount = data.stats.total_available;
+                    
+                    if (requiredCount > availableCount) {
+                        const shortage = requiredCount - availableCount;
+                        html += `
+                            <div class="alert alert-warning mt-3 mb-0">
+                                <i class="fas fa-exclamation-triangle"></i> 
+                                <strong>人数不足:</strong> ${shortage}名不足しています 
+                                <small class="text-muted">(必要: ${requiredCount}名 / 利用可能: ${availableCount}名)</small>
+                            </div>
+                        `;
+                    } else if (requiredCount === availableCount) {
+                        html += `
+                            <div class="alert alert-info mt-3 mb-0">
+                                <i class="fas fa-info-circle"></i> 
+                                必要人数と利用可能人数が一致しています 
+                                <small class="text-muted">(${requiredCount}名)</small>
+                            </div>
+                        `;
+                    } else {
+                        const surplus = availableCount - requiredCount;
+                        html += `
+                            <div class="alert alert-success mt-3 mb-0">
+                                <i class="fas fa-check-circle"></i> 
+                                十分な人数が確保されています 
+                                <small class="text-muted">(必要: ${requiredCount}名 / 利用可能: ${availableCount}名 / 余裕: ${surplus}名)</small>
+                            </div>
+                        `;
+                    }
+                }
+            }
+            
+            html += '</div>';
             staffArea.innerHTML = html;
             
             // 🆕 ランダム選択ボタンを有効化
@@ -901,8 +1041,70 @@ function getAssignmentStats($assignments) {
         }
         
         function showRandomSelectionModal() {
+            // 現在選択されているイベント情報を取得
+            const eventSelect = document.getElementById('event_id');
+            let selectedEvent = null;
+            let defaultStaffCount = 3; // デフォルト値
+            
+            if (eventSelect && eventSelect.value) {
+                selectedEvent = eventsData.find(e => e.id == eventSelect.value);
+                const selectedOption = eventSelect.options[eventSelect.selectedIndex];
+                const totalStaffRequired = selectedOption.getAttribute('data-total-staff');
+                if (totalStaffRequired && !isNaN(totalStaffRequired) && totalStaffRequired > 0) {
+                    defaultStaffCount = Math.min(parseInt(totalStaffRequired), currentAvailableStaff.length);
+                }
+            }
+            
             const runnerCount = currentAvailableStaff.filter(s => s.is_rank === 'ランナー').length;
-            const nonRunnerCount = currentAvailableStaff.length - runnerCount;
+            
+            // コースランナーとビュッフェランナーの数を計算
+            const courseRunners = currentAvailableStaff.filter(s => 
+                s.is_rank === 'ランナー' && 
+                s.skills.some(skill => skill.task_name === 'コースランナー')
+            ).length;
+            const buffetRunners = currentAvailableStaff.filter(s => 
+                s.is_rank === 'ランナー' && 
+                s.skills.some(skill => skill.task_name === 'ビュッフェランナー')
+            ).length;
+            
+            // その他（ランナー以外）の数を正確に計算
+            const nonRunnerCount = currentAvailableStaff.filter(s => s.is_rank !== 'ランナー').length;
+            
+            // イベント種別に応じてランナーカテゴリを制限
+            let showCourseRunner = true;
+            let showBuffetRunner = true;
+            let categoryMessage = '';
+            
+            if (selectedEvent) {
+                const eventType = selectedEvent.event_type;
+                if (eventType === 'コース') {
+                    showBuffetRunner = false;
+                    categoryMessage = '<div class="alert alert-info"><i class="fas fa-info-circle"></i> コースイベントのため、コースランナーのみ選択可能です</div>';
+                } else if (eventType === 'ビュッフェ') {
+                    showCourseRunner = false;
+                    categoryMessage = '<div class="alert alert-info"><i class="fas fa-info-circle"></i> ビュッフェイベントのため、ビュッフェランナーのみ選択可能です</div>';
+                } else if (eventType === '婚礼') {
+                    showBuffetRunner = false;
+                    categoryMessage = '<div class="alert alert-info"><i class="fas fa-info-circle"></i> 婚礼イベントのため、コースランナーのみ選択可能です</div>';
+                }
+            }
+            
+            // デフォルト値の計算（イベント種別に応じて調整）
+            let defaultCourseRunner = 0;
+            let defaultBuffetRunner = 0;
+            let defaultNonRunner = Math.min(Math.ceil(defaultStaffCount * 0.4), nonRunnerCount);
+            
+            if (showCourseRunner && showBuffetRunner) {
+                // 両方表示する場合（その他のイベント種別）
+                defaultCourseRunner = Math.min(Math.ceil(defaultStaffCount * 0.3), courseRunners);
+                defaultBuffetRunner = Math.min(Math.ceil(defaultStaffCount * 0.3), buffetRunners);
+            } else if (showCourseRunner) {
+                // コースランナーのみ（コース、婚礼）
+                defaultCourseRunner = Math.min(Math.ceil(defaultStaffCount * 0.6), courseRunners);
+            } else if (showBuffetRunner) {
+                // ビュッフェランナーのみ（ビュッフェ）
+                defaultBuffetRunner = Math.min(Math.ceil(defaultStaffCount * 0.6), buffetRunners);
+            }
             
             const modalHtml = `
                 <div class="modal fade" id="randomSelectionModal" tabindex="-1">
@@ -913,44 +1115,36 @@ function getAssignmentStats($assignments) {
                                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                             </div>
                             <div class="modal-body">
-                                <div class="mb-3">
-                                    <label class="form-label">選択方法</label>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="selectionMode" id="modeTotal" value="total" checked>
-                                        <label class="form-check-label" for="modeTotal">
-                                            全体から選択
-                                        </label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="selectionMode" id="modeCategory" value="category">
-                                        <label class="form-check-label" for="modeCategory">
-                                            カテゴリ別に選択
-                                        </label>
-                                    </div>
-                                </div>
+                                ${categoryMessage}
                                 
-                                <div id="totalSelection">
-                                    <div class="mb-3">
-                                        <label for="totalCount" class="form-label">選択人数</label>
-                                        <input type="number" class="form-control" id="totalCount" min="1" max="${currentAvailableStaff.length}" value="3">
-                                        <small class="text-muted">出勤可能: ${currentAvailableStaff.length}名（ランナー${runnerCount}名、その他${nonRunnerCount}名）</small>
-                                    </div>
-                                </div>
-                                
-                                <div id="categorySelection" style="display: none;">
+                                <div id="categorySelection">
                                     <div class="row">
-                                        <div class="col-6">
+                                        ${showCourseRunner ? `
+                                        <div class="col-lg-4 col-md-6">
                                             <div class="mb-3">
-                                                <label for="runnerCount" class="form-label">ランナー</label>
-                                                <input type="number" class="form-control" id="runnerCount" min="0" max="${runnerCount}" value="0">
-                                                <small class="text-muted">最大${runnerCount}名</small>
+                                                <label for="courseRunnerCount" class="form-label">
+                                                    <i class="fas fa-running text-primary"></i> コースランナー
+                                                </label>
+                                                <input type="number" class="form-control" id="courseRunnerCount" min="0" max="${courseRunners}" value="${defaultCourseRunner}">
                                             </div>
                                         </div>
-                                        <div class="col-6">
+                                        ` : ''}
+                                        ${showBuffetRunner ? `
+                                        <div class="col-lg-4 col-md-6">
                                             <div class="mb-3">
-                                                <label for="nonRunnerCount" class="form-label">その他</label>
-                                                <input type="number" class="form-control" id="nonRunnerCount" min="0" max="${nonRunnerCount}" value="0">
-                                                <small class="text-muted">最大${nonRunnerCount}名</small>
+                                                <label for="buffetRunnerCount" class="form-label">
+                                                    <i class="fas fa-utensils text-warning"></i> ビュッフェランナー
+                                                </label>
+                                                <input type="number" class="form-control" id="buffetRunnerCount" min="0" max="${buffetRunners}" value="${defaultBuffetRunner}">
+                                            </div>
+                                        </div>
+                                        ` : ''}
+                                        <div class="col-lg-4 col-md-12">
+                                            <div class="mb-3">
+                                                <label for="nonRunnerCount" class="form-label">
+                                                    <i class="fas fa-users text-success"></i> その他
+                                                </label>
+                                                <input type="number" class="form-control" id="nonRunnerCount" min="0" max="${nonRunnerCount}" value="${defaultNonRunner}">
                                             </div>
                                         </div>
                                     </div>
@@ -984,68 +1178,91 @@ function getAssignmentStats($assignments) {
             // モーダル表示
             const modal = new bootstrap.Modal(document.getElementById('randomSelectionModal'));
             modal.show();
-            
-            // 選択方法の切り替え
-            document.querySelectorAll('input[name="selectionMode"]').forEach(radio => {
-                radio.addEventListener('change', function() {
-                    if (this.value === 'total') {
-                        document.getElementById('totalSelection').style.display = 'block';
-                        document.getElementById('categorySelection').style.display = 'none';
-                    } else {
-                        document.getElementById('totalSelection').style.display = 'none';
-                        document.getElementById('categorySelection').style.display = 'block';
-                    }
-                });
-            });
         }
         
         function executeRandomSelection() {
-            const mode = document.querySelector('input[name="selectionMode"]:checked').value;
             const balanceGender = document.getElementById('balanceGender').checked;
+            
+            // フィールドが存在する場合のみ値を取得、存在しない場合は0
+            const courseRunnerCountEl = document.getElementById('courseRunnerCount');
+            const buffetRunnerCountEl = document.getElementById('buffetRunnerCount');
+            const nonRunnerCountEl = document.getElementById('nonRunnerCount');
+            
+            const courseRunnerCount = courseRunnerCountEl ? parseInt(courseRunnerCountEl.value) || 0 : 0;
+            const buffetRunnerCount = buffetRunnerCountEl ? parseInt(buffetRunnerCountEl.value) || 0 : 0;
+            const nonRunnerCount = nonRunnerCountEl ? parseInt(nonRunnerCountEl.value) || 0 : 0;
+            
+            if (courseRunnerCount + buffetRunnerCount + nonRunnerCount === 0) {
+                alert('最低1名は選択してください');
+                return;
+            }
+            
+            // 各カテゴリのスタッフを分類
+            const courseRunners = currentAvailableStaff.filter(s => 
+                s.is_rank === 'ランナー' && 
+                s.skills.some(skill => skill.task_name === 'コースランナー')
+            );
+            const buffetRunners = currentAvailableStaff.filter(s => 
+                s.is_rank === 'ランナー' && 
+                s.skills.some(skill => skill.task_name === 'ビュッフェランナー')
+            );
+            const nonRunners = currentAvailableStaff.filter(s => s.is_rank !== 'ランナー');
+            
+            // 選択可能数のチェックと不足人数の計算
+            let shortageMessages = [];
+            let actualCourseRunnerCount = courseRunnerCount;
+            let actualBuffetRunnerCount = buffetRunnerCount;
+            let actualNonRunnerCount = nonRunnerCount;
+            
+            if (courseRunnerCount > courseRunners.length) {
+                const shortage = courseRunnerCount - courseRunners.length;
+                shortageMessages.push(`コースランナー: ${shortage}名不足（${courseRunners.length}名のみ選択）`);
+                actualCourseRunnerCount = courseRunners.length;
+            }
+            
+            if (buffetRunnerCount > buffetRunners.length) {
+                const shortage = buffetRunnerCount - buffetRunners.length;
+                shortageMessages.push(`ビュッフェランナー: ${shortage}名不足（${buffetRunners.length}名のみ選択）`);
+                actualBuffetRunnerCount = buffetRunners.length;
+            }
+            
+            if (nonRunnerCount > nonRunners.length) {
+                const shortage = nonRunnerCount - nonRunners.length;
+                shortageMessages.push(`その他: ${shortage}名不足（${nonRunners.length}名のみ選択）`);
+                actualNonRunnerCount = nonRunners.length;
+            }
+            
+            // 不足がある場合は警告メッセージを表示
+            if (shortageMessages.length > 0) {
+                const message = `出勤可能な人数が不足しています：\n${shortageMessages.join('\n')}\n\n利用可能な全員を選択して続行しますか？`;
+                if (!confirm(message)) {
+                    return;
+                }
+            }
+            
             let selectedStaff = [];
             
-            if (mode === 'total') {
-                const count = parseInt(document.getElementById('totalCount').value);
-                if (count < 1 || count > currentAvailableStaff.length) {
-                    alert(`選択人数は1名から${currentAvailableStaff.length}名の間で入力してください`);
-                    return;
-                }
-                
-                if (balanceGender) {
-                    selectedStaff = selectWithGenderBalance(currentAvailableStaff, count);
-                } else {
-                    const shuffled = [...currentAvailableStaff].sort(() => 0.5 - Math.random());
-                    selectedStaff = shuffled.slice(0, count);
-                }
+            // 性別バランスを考慮するかどうか
+            if (balanceGender) {
+                selectedStaff = [
+                    ...selectWithGenderBalance(courseRunners, actualCourseRunnerCount),
+                    ...selectWithGenderBalance(buffetRunners, actualBuffetRunnerCount),
+                    ...selectWithGenderBalance(nonRunners, actualNonRunnerCount)
+                ];
             } else {
-                const runnerCount = parseInt(document.getElementById('runnerCount').value);
-                const nonRunnerCount = parseInt(document.getElementById('nonRunnerCount').value);
-                
-                if (runnerCount + nonRunnerCount === 0) {
-                    alert('最低1名は選択してください');
-                    return;
-                }
-                
-                const runners = currentAvailableStaff.filter(s => s.is_rank === 'ランナー');
-                const nonRunners = currentAvailableStaff.filter(s => s.is_rank !== 'ランナー');
-                
-                if (runnerCount > runners.length || nonRunnerCount > nonRunners.length) {
-                    alert('選択人数が利用可能人数を超えています');
-                    return;
-                }
-                
-                const selectedRunners = runners.sort(() => 0.5 - Math.random()).slice(0, runnerCount);
-                const selectedNonRunners = nonRunners.sort(() => 0.5 - Math.random()).slice(0, nonRunnerCount);
-                
-                selectedStaff = [...selectedRunners, ...selectedNonRunners];
+                selectedStaff = [
+                    ...courseRunners.sort(() => 0.5 - Math.random()).slice(0, actualCourseRunnerCount),
+                    ...buffetRunners.sort(() => 0.5 - Math.random()).slice(0, actualBuffetRunnerCount),
+                    ...nonRunners.sort(() => 0.5 - Math.random()).slice(0, actualNonRunnerCount)
+                ];
             }
             
             // モーダルを閉じる
             const modal = bootstrap.Modal.getInstance(document.getElementById('randomSelectionModal'));
             modal.hide();
             
-            // 結果を表示
-            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length);
+            // 結果を表示（不足メッセージも含む）
+            showRandomSelectionResult(selectedStaff, currentAvailableStaff.length, shortageMessages);
         }
         
         function selectWithGenderBalance(staff, count) {
@@ -1071,7 +1288,7 @@ function getAssignmentStats($assignments) {
             return selected.sort(() => 0.5 - Math.random());
         }
         
-        function showRandomSelectionResult(selectedStaff, totalCount) {
+        function showRandomSelectionResult(selectedStaff, totalCount, shortageMessages = []) {
             // 🆕 選択されたスタッフデータをグローバル変数に保存
             currentSelectedStaff = selectedStaff;
             
@@ -1079,34 +1296,172 @@ function getAssignmentStats($assignments) {
             const resultArea = document.getElementById('randomSelectionResult');
             const selectedStaffList = document.getElementById('selectedStaffList');
             
-            // 選択されたスタッフのHTML生成
-            let staffHtml = '';
-            selectedStaff.forEach((staff, index) => {
-                const genderBadge = staff.gender === 'M' ? '♂' : '♀';
-                const timeDisplay = staff.available_start_time && staff.available_end_time ?
-                    `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
-                const rankBadge = staff.is_rank === 'ランナー' ? 
-                    '<span class="badge bg-primary btn-sm">ランナー</span>' : 
-                    '<span class="badge bg-secondary btn-sm">その他</span>';
-                
-                staffHtml += `
-                    <div class="col-md-6 mb-2">
-                        <div class="border border-success rounded p-2 bg-light">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div>
-                                    <div class="fw-bold text-success">${index + 1}. ${staff.name}</div>
-                                    <div class="text-muted small">${timeDisplay}</div>
-                                    <div class="mt-1">${rankBadge}</div>
-                                </div>
-                                <span class="badge bg-success">${genderBadge}</span>
-                            </div>
-                        </div>
+            // 不足メッセージがある場合は表示
+            let shortageWarning = '';
+            if (shortageMessages.length > 0) {
+                shortageWarning = `
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle"></i> <strong>人数不足のお知らせ</strong><br>
+                        ${shortageMessages.map(msg => `• ${msg}`).join('<br>')}
                     </div>
                 `;
-            });
+            }
+            
+            // 各カテゴリに分ける
+            const courseRunners = selectedStaff.filter(staff => 
+                staff.is_rank === 'ランナー' && 
+                staff.skills.some(skill => skill.task_name === 'コースランナー')
+            );
+            const buffetRunners = selectedStaff.filter(staff => 
+                staff.is_rank === 'ランナー' && 
+                staff.skills.some(skill => skill.task_name === 'ビュッフェランナー')
+            );
+            const nonRunners = selectedStaff.filter(staff => staff.is_rank !== 'ランナー');
+            
+            // 選択されたスタッフのHTML生成
+            let staffHtml = '';
+            
+            // コースランナーセクション
+            if (courseRunners.length > 0) {
+                staffHtml += `
+                    <div class="col-12 mb-3">
+                        <h6 class="text-primary">
+                            <i class="fas fa-running"></i> コースランナー (${courseRunners.length}名)
+                        </h6>
+                    </div>
+                `;
+                
+                courseRunners.forEach((staff, index) => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    staffHtml += `
+                        <div class="col-md-6 mb-2">
+                            <div class="border border-primary rounded p-2 bg-light">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold text-primary">${index + 1}. ${staff.name}</div>
+                                        <div class="text-muted small">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-primary">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            // ビュッフェランナーセクション
+            if (buffetRunners.length > 0) {
+                staffHtml += `
+                    <div class="col-12 mb-3 ${courseRunners.length > 0 ? 'mt-3' : ''}">
+                        <h6 class="text-warning">
+                            <i class="fas fa-utensils"></i> ビュッフェランナー (${buffetRunners.length}名)
+                        </h6>
+                    </div>
+                `;
+                
+                buffetRunners.forEach((staff, index) => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    staffHtml += `
+                        <div class="col-md-6 mb-2">
+                            <div class="border border-warning rounded p-2 bg-light">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold text-warning">${index + 1}. ${staff.name}</div>
+                                        <div class="text-muted small">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-warning">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            // その他セクション
+            if (nonRunners.length > 0) {
+                staffHtml += `
+                    <div class="col-12 mb-3 ${(courseRunners.length > 0 || buffetRunners.length > 0) ? 'mt-3' : ''}">
+                        <h6 class="text-success">
+                            <i class="fas fa-users"></i> その他 (${nonRunners.length}名)
+                        </h6>
+                    </div>
+                `;
+                
+                nonRunners.forEach((staff, index) => {
+                    const genderBadge = staff.gender === 'M' ? '♂' : '♀';
+                    const timeDisplay = staff.available_start_time && staff.available_end_time ?
+                        `${staff.available_start_time.substr(0, 5)} - ${staff.available_end_time.substr(0, 5)}` : '時間未設定';
+                    
+                    staffHtml += `
+                        <div class="col-md-6 mb-2">
+                            <div class="border border-success rounded p-2 bg-light">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="fw-bold text-success">${index + 1}. ${staff.name}</div>
+                                        <div class="text-muted small">${timeDisplay}</div>
+                                    </div>
+                                    <span class="badge bg-success">${genderBadge}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            // 不足人数の情報を追加
+            const eventSelect = document.getElementById('event_id');
+            if (eventSelect && eventSelect.value) {
+                const selectedOption = eventSelect.options[eventSelect.selectedIndex];
+                const totalStaffRequired = selectedOption.getAttribute('data-total-staff');
+                
+                if (totalStaffRequired && !isNaN(totalStaffRequired) && totalStaffRequired > 0) {
+                    const requiredCount = parseInt(totalStaffRequired);
+                    const selectedCount = selectedStaff.length;
+                    
+                    if (requiredCount > selectedCount) {
+                        const shortage = requiredCount - selectedCount;
+                        staffHtml += `
+                            <div class="col-12 mt-3">
+                                <div class="alert alert-warning">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    <strong>人数不足:</strong> ${shortage}名不足しています 
+                                    <small class="text-muted">(必要: ${requiredCount}名 / 選択: ${selectedCount}名)</small>
+                                </div>
+                            </div>
+                        `;
+                    } else if (requiredCount === selectedCount) {
+                        staffHtml += `
+                            <div class="col-12 mt-3">
+                                <div class="alert alert-info">
+                                    <i class="fas fa-check-circle"></i> 
+                                    必要人数がちょうど選択されています 
+                                    <small class="text-muted">(${requiredCount}名)</small>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        const surplus = selectedCount - requiredCount;
+                        staffHtml += `
+                            <div class="col-12 mt-3">
+                                <div class="alert alert-success">
+                                    <i class="fas fa-check-circle"></i> 
+                                    必要人数以上が選択されています 
+                                    <small class="text-muted">(必要: ${requiredCount}名 / 選択: ${selectedCount}名 / 余裕: ${surplus}名)</small>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+            }
             
             // 結果を表示
-            selectedStaffList.innerHTML = staffHtml;
+            selectedStaffList.innerHTML = shortageWarning + staffHtml;
             resultArea.style.display = 'block';
             
             // 結果エリアまでスクロール
@@ -1114,7 +1469,13 @@ function getAssignmentStats($assignments) {
             
             // アラートメッセージを更新
             const alertDiv = resultArea.querySelector('.alert-success h6');
-            alertDiv.innerHTML = `🎲 ランダム選択されたスタッフ (${totalCount}名中 ${selectedStaff.length}名)`;
+            const summaryText = [
+                courseRunners.length > 0 ? `コース${courseRunners.length}名` : '',
+                buffetRunners.length > 0 ? `ビュッフェ${buffetRunners.length}名` : '',
+                nonRunners.length > 0 ? `その他${nonRunners.length}名` : ''
+            ].filter(text => text).join('・');
+            
+            alertDiv.innerHTML = `🎲 ランダム選択されたスタッフ (${totalCount}名中 ${summaryText})`;
         }
         
         // 🆕 結果表示を非表示にする関数

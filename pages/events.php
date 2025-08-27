@@ -169,12 +169,20 @@ if ($_POST['action'] ?? '' === 'add_event') {
         if ($hasTotal) {
             // total_staff_requiredカラムがある場合
             $stmt = $pdo->prepare("
-                INSERT INTO events (event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO events (event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required, course_runner_count, buffet_runner_count, light_count, parents_count) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $totalStaffRequired = (int)$_POST['total_staff_required'];
+            $courseRunnerCount = (int)($_POST['course_runner_count'] ?? 0);
+            $buffetRunnerCount = (int)($_POST['buffet_runner_count'] ?? 0);
+            $lightCount = (int)($_POST['light_count'] ?? 0);
+            $parentsCount = (int)($_POST['parents_count'] ?? 0);
             
             error_log("events.php: 総必要人数の値: " . $totalStaffRequired);
+            error_log("events.php: コースランナー数: " . $courseRunnerCount);
+            error_log("events.php: ビュッフェランナー数: " . $buffetRunnerCount);
+            error_log("events.php: ライト数: " . $lightCount);
+            error_log("events.php: 両親数: " . $parentsCount);
             
             $result = $stmt->execute([
                 $_POST['event_date'],
@@ -184,7 +192,11 @@ if ($_POST['action'] ?? '' === 'add_event') {
                 $_POST['venue'] ?? '',
                 json_encode($needs),
                 $_POST['description'] ?? '',
-                $totalStaffRequired
+                $totalStaffRequired,
+                $courseRunnerCount,
+                $buffetRunnerCount,
+                $lightCount,
+                $parentsCount
             ]);
             
             if ($result) {
@@ -282,12 +294,16 @@ if ($_POST['action'] ?? '' === 'edit_event') {
         
         if ($hasTotal) {
             $totalStaffRequired = (int)$_POST['total_staff_required'];
+            $courseRunnerCount = (int)($_POST['course_runner_count'] ?? 0);
+            $buffetRunnerCount = (int)($_POST['buffet_runner_count'] ?? 0);
+            $lightCount = (int)($_POST['light_count'] ?? 0);
+            $parentsCount = (int)($_POST['parents_count'] ?? 0);
             
             error_log("events.php: UPDATE実行開始 - event_id: " . $_POST['event_id']);
             
             $stmt = $pdo->prepare("
                 UPDATE events 
-                SET event_date = ?, start_time = ?, end_time = ?, event_type = ?, venue = ?, needs = ?, description = ?, total_staff_required = ?
+                SET event_date = ?, start_time = ?, end_time = ?, event_type = ?, venue = ?, needs = ?, description = ?, total_staff_required = ?, course_runner_count = ?, buffet_runner_count = ?, light_count = ?, parents_count = ?
                 WHERE id = ?
             ");
             $result = $stmt->execute([
@@ -299,6 +315,10 @@ if ($_POST['action'] ?? '' === 'edit_event') {
                 json_encode($needs),
                 $_POST['description'],
                 $totalStaffRequired,
+                $courseRunnerCount,
+                $buffetRunnerCount,
+                $lightCount,
+                $parentsCount,
                 $eventId
             ]);
             
@@ -372,29 +392,42 @@ try {
     }
     
     // 一回だけクエリを実行（DISTINCTで重複除去）
-    if ($hasTotal) {
-        $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required FROM events ORDER BY event_date, start_time");
-    } else {
-        $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description FROM events ORDER BY event_date, start_time");
+    try {
+        // まず全カラムを含むクエリを試行
+        $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required, course_runner_count, buffet_runner_count, light_count, parents_count FROM events ORDER BY event_date, start_time");
+    } catch(PDOException $e) {
+        error_log("events.php: 拡張カラムでのクエリ失敗、基本カラムで再試行: " . $e->getMessage());
+        if ($hasTotal) {
+            $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description, total_staff_required FROM events ORDER BY event_date, start_time");
+        } else {
+            $stmt = $pdo->query("SELECT DISTINCT id, event_date, start_time, end_time, event_type, venue, needs, description FROM events ORDER BY event_date, start_time");
+        }
     }
     
     $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // カラムが存在しない場合はnullで初期化
-    if (!$hasTotal) {
-        foreach ($events as &$event) {
+    // カラムが存在しない場合はデフォルト値で初期化
+    foreach ($events as &$event) {
+        if (!isset($event['total_staff_required'])) {
             $event['total_staff_required'] = null;
         }
-        unset($event); // 参照を破棄
-    }
-    
-    // venueカラムが存在しない場合の対応
-    foreach ($events as &$event) {
+        if (!isset($event['course_runner_count'])) {
+            $event['course_runner_count'] = 0;
+        }
+        if (!isset($event['buffet_runner_count'])) {
+            $event['buffet_runner_count'] = 0;
+        }
+        if (!isset($event['light_count'])) {
+            $event['light_count'] = 0;
+        }
+        if (!isset($event['parents_count'])) {
+            $event['parents_count'] = 0;
+        }
         if (!isset($event['venue'])) {
             $event['venue'] = '';
         }
     }
-    unset($event); // 参照を破棄
+    unset($event); // 参照を解除
     
     error_log("events.php: 重複削除前 " . count($events) . "件のイベント");
     
@@ -606,7 +639,7 @@ $taskTypes = $stmt->fetchAll();
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">イベント種別</label>
-                                    <select class="form-select" name="event_type" required>
+                                    <select class="form-select" name="event_type" id="addEventType" onchange="toggleRunnerFields('add')" required>
                                         <option value="">選択してください</option>
                                         <option value="ビュッフェ">ビュッフェ</option>
                                         <option value="コース">コース</option>
@@ -616,6 +649,17 @@ $taskTypes = $stmt->fetchAll();
                                     </select>
                                 </div>
                             </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">総必要人数 <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control" name="total_staff_required" 
+                                           min="1" max="100" placeholder="例: 10" value="" required>
+                                    <small class="form-text text-muted">全体で必要な人数（必須）</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">会場</label>
@@ -633,43 +677,52 @@ $taskTypes = $stmt->fetchAll();
                                     <small class="form-text text-muted">会場を選択してください（任意）</small>
                                 </div>
                             </div>
+                            <div class="col-md-6">
+                                <!-- コースランナー数フィールド -->
+                                <div class="mb-3" id="addCourseRunnerField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-running text-primary"></i> コースランナー数
+                                    </label>
+                                    <input type="number" class="form-control" name="course_runner_count" 
+                                           min="0" max="50" placeholder="例: 3" value="0">
+                                    <small class="form-text text-muted">コースランナーの必要人数</small>
+                                </div>
+                                <!-- ビュッフェランナー数フィールド -->
+                                <div class="mb-3" id="addBuffetRunnerField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-utensils text-warning"></i> ビュッフェランナー数
+                                    </label>
+                                    <input type="number" class="form-control" name="buffet_runner_count" 
+                                           min="0" max="50" placeholder="例: 2" value="0">
+                                    <small class="form-text text-muted">ビュッフェランナーの必要人数</small>
+                                </div>
+                                <!-- ライト数フィールド（婚礼用） -->
+                                <div class="mb-3" id="addLightField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-lightbulb text-info"></i> ライト数
+                                    </label>
+                                    <input type="number" class="form-control" name="light_count" 
+                                           min="0" max="20" placeholder="例: 2" value="0">
+                                    <small class="form-text text-muted">ライトの必要人数</small>
+                                </div>
+                                <!-- 両親数フィールド（婚礼用） -->
+                                <div class="mb-3" id="addParentsField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-users text-success"></i> 両親数
+                                    </label>
+                                    <input type="number" class="form-control" name="parents_count" 
+                                           min="0" max="10" placeholder="例: 2" value="0">
+                                    <small class="form-text text-muted">両親の必要人数</small>
+                                </div>
+                            </div>
                         </div>
                         
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">総必要人数 <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control" name="total_staff_required" 
-                                           min="1" max="100" placeholder="例: 10" value="" required>
-                                    <small class="form-text text-muted">全体で必要な人数（必須）</small>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
                                     <label class="form-label">説明</label>
                                     <input type="text" class="form-control" name="description" placeholder="例: 企業懇親会">
                                 </div>
-                            </div>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label class="form-label">役割別必要人数 <small class="text-muted">（オプション）</small></label>
-                            <p class="small text-muted mb-2">
-                                特定の役割で必要な人数を指定したい場合に入力してください。<br>
-                                <strong>総必要人数（上記）は必須です。</strong>役割別は補足的な情報として使用されます。<br>
-                                <span style="color: #1976d2;">💡 イベント種別を選択すると、対応するランナーがハイライトされます。</span>
-                            </p>
-                            <div class="row">
-                                <?php foreach ($taskTypes as $taskType): ?>
-                                <div class="col-md-4 mb-2">
-                                    <label class="form-label small"><?= h($taskType['name']) ?></label>
-                                    <input type="text" 
-                                           class="form-control form-control-sm" 
-                                           name="needs[<?= h($taskType['name']) ?>]" 
-                                           placeholder="例: 2 or 1-3">
-                                    <small class="form-text text-muted">固定数または範囲（1-3）</small>
-                                </div>
-                                <?php endforeach; ?>
                             </div>
                         </div>
                     </div>
@@ -743,7 +796,7 @@ $taskTypes = $stmt->fetchAll();
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">イベント種別</label>
-                                    <select class="form-select" name="event_type" id="editEventType" required>
+                                    <select class="form-select" name="event_type" id="editEventType" onchange="toggleRunnerFields('edit')" required>
                                         <option value="">選択してください</option>
                                         <option value="ビュッフェ">ビュッフェ</option>
                                         <option value="コース">コース</option>
@@ -753,6 +806,17 @@ $taskTypes = $stmt->fetchAll();
                                     </select>
                                 </div>
                             </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">総必要人数 <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control" name="total_staff_required" id="editTotalStaffRequired"
+                                           min="1" max="100" placeholder="例: 10" value="" required>
+                                    <small class="form-text text-muted">全体で必要な人数（必須）</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">会場</label>
@@ -770,44 +834,55 @@ $taskTypes = $stmt->fetchAll();
                                     <small class="form-text text-muted">会場を選択してください（任意）</small>
                                 </div>
                             </div>
+                            <div class="col-md-6">
+                                <!-- コースランナー数フィールド -->
+                                <div class="mb-3" id="editCourseRunnerField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-running text-primary"></i> コースランナー数
+                                    </label>
+                                    <input type="number" class="form-control" name="course_runner_count" id="editCourseRunnerCount"
+                                           min="0" max="50" placeholder="例: 3" value="0">
+                                    <small class="form-text text-muted">コースランナーの必要人数</small>
+                                </div>
+                                <!-- ビュッフェランナー数フィールド -->
+                                <div class="mb-3" id="editBuffetRunnerField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-utensils text-warning"></i> ビュッフェランナー数
+                                    </label>
+                                    <input type="number" class="form-control" name="buffet_runner_count" id="editBuffetRunnerCount"
+                                           min="0" max="50" placeholder="例: 2" value="0">
+                                    <small class="form-text text-muted">ビュッフェランナーの必要人数</small>
+                                </div>
+                                <!-- ライト数フィールド（婚礼用） -->
+                                <div class="mb-3" id="editLightField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-lightbulb text-info"></i> ライト数
+                                    </label>
+                                    <input type="number" class="form-control" name="light_count" id="editLightCount"
+                                           min="0" max="20" placeholder="例: 2" value="0">
+                                    <small class="form-text text-muted">ライトの必要人数</small>
+                                </div>
+                                <!-- 両親数フィールド（婚礼用） -->
+                                <div class="mb-3" id="editParentsField" style="display: none;">
+                                    <label class="form-label">
+                                        <i class="fas fa-users text-success"></i> 両親数
+                                    </label>
+                                    <input type="number" class="form-control" name="parents_count" id="editParentsCount"
+                                           min="0" max="10" placeholder="例: 2" value="0">
+                                    <small class="form-text text-muted">両親の必要人数</small>
+                                </div>
+                            </div>
                         </div>
                         
                         <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">総必要人数 <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control" name="total_staff_required" id="editTotalStaffRequired"
-                                           min="1" max="100" placeholder="例: 10" value="" required>
-                                    <small class="form-text text-muted">全体で必要な人数（必須）</small>
-                                </div>
-                            </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">説明</label>
                                     <input type="text" class="form-control" name="description" id="editDescription" placeholder="例: 企業懇親会">
                                 </div>
                             </div>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label class="form-label">役割別必要人数 <small class="text-muted">（オプション）</small></label>
-                            <p class="small text-muted mb-2">
-                                特定の役割で必要な人数を指定したい場合に入力してください。<br>
-                                <strong>総必要人数（上記）は必須です。</strong>役割別は補足的な情報として使用されます。<br>
-                                <span style="color: #1976d2;">💡 イベント種別を選択すると、対応するランナーがハイライトされます。</span>
-                            </p>
-                            <div class="row" id="editNeedsContainer">
-                                <?php foreach ($taskTypes as $taskType): ?>
-                                <div class="col-md-4 mb-2">
-                                    <label class="form-label small"><?= h($taskType['name']) ?></label>
-                                    <input type="text" 
-                                           class="form-control form-control-sm edit-needs-input" 
-                                           name="needs[<?= h($taskType['name']) ?>]" 
-                                           data-role="<?= h($taskType['name']) ?>"
-                                           placeholder="例: 2 or 1-3">
-                                    <small class="form-text text-muted">固定数または範囲（1-3）</small>
-                                </div>
-                                <?php endforeach; ?>
+                            <div class="col-md-6">
+                                <!-- 空のスペース -->
                             </div>
                         </div>
                     </div>
@@ -952,69 +1027,157 @@ $taskTypes = $stmt->fetchAll();
         }
         
         function editEvent(eventId) {
-            console.log('editEvent called with ID:', eventId);
+            try {
+                console.log('editEvent called with ID:', eventId);
+                console.log('eventsData available:', typeof eventsData !== 'undefined');
+                console.log('eventsData length:', eventsData ? eventsData.length : 'undefined');
+                
+                // まず編集フォームをリセット
+                const editForm = document.querySelector('#editEventModal form');
+                if (editForm) {
+                    editForm.reset();
+                } else {
+                    console.error('Edit form not found!');
+                }
+                
+                if (typeof eventsData === 'undefined') {
+                    console.error('eventsData is not defined!');
+                    alert('イベントデータが読み込まれていません。ページを再読み込みしてください。');
+                    return;
+                }
+                
+                const event = eventsData.find(e => e.id == eventId);
+                console.log('Found event:', event);
+                if (!event) {
+                    console.error('Event not found for ID:', eventId);
+                    alert('イベントデータが見つかりません。');
+                    return;
+                }
+                
+                // 基本情報を設定
+                const editEventIdEl = document.getElementById('editEventId');
+                const editEventDateEl = document.getElementById('editEventDate');
+                const editEventTypeEl = document.getElementById('editEventType');
+                const editVenueEl = document.getElementById('editVenue');
+                const editDescriptionEl = document.getElementById('editDescription');
+                const editTotalStaffRequiredEl = document.getElementById('editTotalStaffRequired');
+                
+                if (!editEventIdEl) console.error('editEventId element not found');
+                if (!editEventDateEl) console.error('editEventDate element not found');
+                if (!editEventTypeEl) console.error('editEventType element not found');
+                if (!editVenueEl) console.error('editVenue element not found');
+                if (!editDescriptionEl) console.error('editDescription element not found');
+                if (!editTotalStaffRequiredEl) console.error('editTotalStaffRequired element not found');
+                
+                if (editEventIdEl) editEventIdEl.value = event.id;
+                if (editEventDateEl) editEventDateEl.value = event.event_date;
+                if (editEventTypeEl) editEventTypeEl.value = event.event_type;
+                if (editVenueEl) editVenueEl.value = event.venue || '';
+                if (editDescriptionEl) editDescriptionEl.value = event.description || '';
+                if (editTotalStaffRequiredEl) editTotalStaffRequiredEl.value = event.total_staff_required || '';
+                
+                console.log('Set editEventId to:', event.id);
+                
+                // ランナー数を設定
+                const editCourseRunnerCountEl = document.getElementById('editCourseRunnerCount');
+                const editBuffetRunnerCountEl = document.getElementById('editBuffetRunnerCount');
+                const editLightCountEl = document.getElementById('editLightCount');
+                const editParentsCountEl = document.getElementById('editParentsCount');
+                
+                if (editCourseRunnerCountEl) editCourseRunnerCountEl.value = event.course_runner_count || 0;
+                if (editBuffetRunnerCountEl) editBuffetRunnerCountEl.value = event.buffet_runner_count || 0;
+                if (editLightCountEl) editLightCountEl.value = event.light_count || 0;
+                if (editParentsCountEl) editParentsCountEl.value = event.parents_count || 0;
+                
+                // イベント種別に応じてフィールドを表示
+                toggleRunnerFields('edit');
             
-            // まず編集フォームをリセット
-            const editForm = document.querySelector('#editEventModal form');
-            if (editForm) {
-                editForm.reset();
-            }
-            
-            const event = eventsData.find(e => e.id == eventId);
-            console.log('Found event:', event);
-            if (!event) {
-                alert('イベントデータが見つかりません。');
-                return;
-            }
-            
-            // 基本情報を設定
-            document.getElementById('editEventId').value = event.id;
-            console.log('Set editEventId to:', event.id);
-            document.getElementById('editEventDate').value = event.event_date;
-            document.getElementById('editEventType').value = event.event_type;
-            document.getElementById('editVenue').value = event.venue || '';
-            document.getElementById('editDescription').value = event.description || '';
-            document.getElementById('editTotalStaffRequired').value = event.total_staff_required || '';
-            
-            // 時間を分割して設定
-            const startTime = event.start_time.split(':');
-            const endTime = event.end_time.split(':');
-            
-            document.getElementById('editStartHour').value = startTime[0];
-            document.getElementById('editStartMinute').value = startTime[1];
-            document.getElementById('editEndHour').value = endTime[0];
-            document.getElementById('editEndMinute').value = endTime[1];
-            
-            // 役割別必要人数をクリア
-            document.querySelectorAll('.edit-needs-input').forEach(input => {
-                input.value = '';
-            });
-            
-            // イベント種別に応じて表示を調整（先に実行）
-            const editEventTypeSelect = document.getElementById('editEventType');
-            handleEventTypeChange(editEventTypeSelect, true);
-            
-            // 既存の役割別必要人数を設定（イベント種別処理の後に実行）
-            if (event.needs) {
-                const needs = JSON.parse(event.needs);
-                Object.keys(needs).forEach(role => {
-                    const input = document.querySelector(`input[data-role="${role}"]`);
-                    if (input) {
-                        input.value = needs[role];
+                // 時間を分割して設定
+                if (event.start_time && event.end_time) {
+                    const startTime = event.start_time.split(':');
+                    const endTime = event.end_time.split(':');
+                    
+                    const editStartHourEl = document.getElementById('editStartHour');
+                    const editStartMinuteEl = document.getElementById('editStartMinute');
+                    const editEndHourEl = document.getElementById('editEndHour');
+                    const editEndMinuteEl = document.getElementById('editEndMinute');
+                    
+                    if (editStartHourEl) editStartHourEl.value = startTime[0];
+                    if (editStartMinuteEl) editStartMinuteEl.value = startTime[1];
+                    if (editEndHourEl) editEndHourEl.value = endTime[0];
+                    if (editEndMinuteEl) editEndMinuteEl.value = endTime[1];
+                } else {
+                    console.warn('Start time or end time is missing for event:', event);
+                }
+                
+                // 役割別必要人数をクリア
+                const editNeedsInputs = document.querySelectorAll('.edit-needs-input');
+                if (editNeedsInputs && editNeedsInputs.length > 0) {
+                    editNeedsInputs.forEach(input => {
+                        input.value = '';
+                    });
+                } else {
+                    console.warn('No .edit-needs-input elements found');
+                }
+                
+                // イベント種別に応じて表示を調整（先に実行）
+                const editEventTypeSelect = document.getElementById('editEventType');
+                if (editEventTypeSelect) {
+                    if (typeof handleEventTypeChange === 'function') {
+                        try {
+                            handleEventTypeChange(editEventTypeSelect, true);
+                        } catch (e) {
+                            console.warn('Error in handleEventTypeChange:', e);
+                        }
+                    } else {
+                        console.warn('handleEventTypeChange function not found, using toggleRunnerFields instead');
+                        // 代替としてtoggleRunnerFieldsを使用
+                        if (typeof toggleRunnerFields === 'function') {
+                            toggleRunnerFields('edit');
+                        }
                     }
-                });
+                } else {
+                    console.warn('editEventType element not found');
+                }
+                
+                // 既存の役割別必要人数を設定（イベント種別処理の後に実行）
+                if (event.needs) {
+                    try {
+                        const needs = JSON.parse(event.needs);
+                        Object.keys(needs).forEach(role => {
+                            const input = document.querySelector(`input[data-role="${role}"]`);
+                            if (input) {
+                                input.value = needs[role];
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('Failed to parse event needs:', e);
+                    }
+                }
+            
+                // モーダルを表示
+                console.log('Opening edit modal for event ID:', event.id);
+                const editModalElement = document.getElementById('editEventModal');
+                if (editModalElement) {
+                    const modal = new bootstrap.Modal(editModalElement);
+                    modal.show();
+                    
+                    // モーダルが表示された後に隠しフィールドの値を再確認
+                    setTimeout(() => {
+                        const hiddenEventId = document.getElementById('editEventId');
+                        if (hiddenEventId) {
+                            console.log('Hidden event_id field value after modal show:', hiddenEventId.value);
+                        } else {
+                            console.error('editEventId element not found after modal show');
+                        }
+                    }, 100);
+                } else {
+                    console.error('editEventModal element not found');
+                    alert('編集モーダルが見つかりません。');
+                }            } catch (error) {
+                console.error('Error in editEvent function:', error);
+                alert('編集機能でエラーが発生しました: ' + error.message);
             }
-            
-            // モーダルを表示
-            console.log('Opening edit modal for event ID:', event.id);
-            const modal = new bootstrap.Modal(document.getElementById('editEventModal'));
-            modal.show();
-            
-            // モーダルが表示された後に隠しフィールドの値を再確認
-            setTimeout(() => {
-                const hiddenEventId = document.getElementById('editEventId').value;
-                console.log('Hidden event_id field value after modal show:', hiddenEventId);
-            }, 100);
         }
         
         function deleteEvent(eventId, eventName) {
@@ -1197,6 +1360,38 @@ $taskTypes = $stmt->fetchAll();
                 });
             });
         });
+        
+        // イベント種別に応じてランナー数フィールドを表示/非表示
+        function toggleRunnerFields(modalType) {
+            const eventTypeSelect = document.getElementById(modalType + 'EventType');
+            const courseRunnerField = document.getElementById(modalType + 'CourseRunnerField');
+            const buffetRunnerField = document.getElementById(modalType + 'BuffetRunnerField');
+            const lightField = document.getElementById(modalType + 'LightField');
+            const parentsField = document.getElementById(modalType + 'ParentsField');
+            
+            if (!eventTypeSelect || !courseRunnerField || !buffetRunnerField || !lightField || !parentsField) {
+                return;
+            }
+            
+            const eventType = eventTypeSelect.value;
+            
+            // すべてのフィールドを一旦非表示に
+            courseRunnerField.style.display = 'none';
+            buffetRunnerField.style.display = 'none';
+            lightField.style.display = 'none';
+            parentsField.style.display = 'none';
+            
+            // イベント種別に応じて表示
+            if (eventType === 'コース') {
+                courseRunnerField.style.display = 'block';
+            } else if (eventType === 'ビュッフェ') {
+                buffetRunnerField.style.display = 'block';
+            } else if (eventType === '婚礼') {
+                courseRunnerField.style.display = 'block';
+                lightField.style.display = 'block';
+                parentsField.style.display = 'block';
+            }
+        }
     </script>
 </body>
 </html>
